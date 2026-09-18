@@ -55,13 +55,39 @@ and re-run, never papered over.
    `Received second interrupt`. Fix: health asserted before and after; a dead server records
    `invalid` instead of a plausible-looking row.
 
+## What the baseline actually did
+
+```
+trial  arm       wall_s  turns  check_fails  rewrites  prose_max  blocked  passed  status
+1      baseline    1476     21            1         1       6070        0       0  timeout
+```
+
+It wrote the spec once (4,880 characters), the check failed, and it never changed a file again.
+The check's answer was `Error: Transform failed with 1 error: [PARSE_ERROR] Unterminated string`
+at `entity-snapshot.spec.ts:86:68` - a syntax error in the file it had just written. It read that
+as a broken environment instead, and spent the rest of the run in `node_modules` looking for
+`oxc`. The 1,800 s wall clock ended it.
+
+The failure is not that the model is slow. It is that the check result, which already names the
+file and the exact position, does not say whose file it is.
+
 ## Hypotheses queued
 
-Drawn from the transcripts, in the order the evidence supports them:
+In the order the evidence supports them:
 
-1. **Rewrite blocker** (`BONSAI_BLOCK_REWRITE=0` to remove it): the model rewrites a whole file
-   after a failed check — measured at 5,136 and 5,061 characters, 170–208 s each.
-2. **`--reasoning N`**: 512 against the 1024 default, cleanly this time.
-3. **Reconnaissance**: 6–10 reader calls before the first write, every run.
-4. **Edit-match failures**: `edit` already does fuzzy matching upstream, so a rejected edit means
-   the model invented text. The error names no alternative — it could name the closest region.
+1. **Parse errors are reported as the model's own syntax error** (implemented: `parseError()` in
+   `check-after-edit.ts`). The message already had file, line and column; the change says it is a
+   syntax error in the file just written and that vitest, oxc and the config are not the problem.
+   Trial 2.
+2. **The output cap can hide the error.** `MAX_OUTPUT_CHARS` keeps the head of the check output,
+   and vitest prints its summary before the failure detail. Not the binding constraint here (the
+   parse error survived at ~700 characters) but it will be on a noisier suite.
+3. **Reconnaissance**: 6 reader calls before the first write, every run. The read nudge exists and
+   had never been switched on.
+4. **`--reasoning N`**: 512 against the 1024 default.
+
+A fifth hypothesis was withdrawn: the first diagnostics reported the same bash command repeated
+**fifteen times**, which motivated a repeat-breaking extension. The commands are 23 *distinct*
+calls that share a `cd <worktree> && ` prefix, and the metric keyed on a 60-character prefix. No
+true repeats exist in the baseline. The extension was reverted and the metric fixed.
+
