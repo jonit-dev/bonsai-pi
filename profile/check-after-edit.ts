@@ -26,6 +26,30 @@ interface ExecError extends Error {
 	code?: number | string;
 }
 
+/**
+ * A file the bundler could not parse is not a failing test - the tests never ran.
+ *
+ * Measured on the entity-snapshot task: the model wrote a spec with an unterminated string at
+ * line 86, vitest answered `Error: Transform failed with 1 error: [PARSE_ERROR] Unterminated
+ * string`, and the model read that as a broken environment. It spent the next fifteen turns
+ * grepping node_modules for "oxc" and "Transform failed" and never touched its own line 86, then
+ * the 1800 s wall clock ended the run. The error already names the file, line and column; what it
+ * does not say is *whose* fault it is, and that is the part this adds.
+ */
+function parseError(output: string): { file: string; line: string; column: string; message: string } | undefined {
+	// The report is ANSI-coloured, so the widths between the words are escape codes, not spaces.
+	const clean = output.replace(/\u001b\[[0-9;]*m/g, "");
+	const marker = clean.match(/\[PARSE_ERROR\]\s*([^\n]+)/);
+	if (!marker) {
+		return undefined;
+	}
+	const at = clean.slice(marker.index).match(/([\w./-]+\.[A-Za-z]+):(\d+):(\d+)/);
+	if (!at) {
+		return undefined;
+	}
+	return { file: at[1], line: at[2], column: at[3], message: marker[1].trim() };
+}
+
 export default function checkAfterEdit(pi: ExtensionAPI): void {
 	const command = process.env.BONSAI_CHECK_COMMAND?.trim();
 	if (!command) {
@@ -73,8 +97,17 @@ export default function checkAfterEdit(pi: ExtensionAPI): void {
 
 		failures += 1;
 		const verdict = `exited ${outcome.code} - the check FAILS`;
+		const parse = parseError(outcome.output);
 		let advice = "";
-		if (failures >= stopAt) {
+		if (parse) {
+			// Say whose fault it is. The raw error already names file, line and column; the model's
+			// mistake is reading a parse failure as an environment problem.
+			advice =
+				`\n\n[the check ran no tests: ${parse.file} does not parse - "${parse.message}" at line ` +
+				`${parse.line}, column ${parse.column}. That is a syntax error in the file you just wrote, not ` +
+				`a problem with vitest, oxc, node_modules or the config. Read that line and fix it with one ` +
+				`edit. Do not investigate the toolchain.]`;
+		} else if (failures >= stopAt) {
 			stopped = true;
 			advice = `\n\n[this check has failed ${failures} times in a row. Stop changing code and report what you ` +
 				`have: the last error, what you tried, and what you think the cause is.]`;

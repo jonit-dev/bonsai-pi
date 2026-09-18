@@ -41,7 +41,10 @@ def report(path: pathlib.Path) -> None:
                         first_write_turn = turn
             for b in calls:
                 args = str(b.get("arguments"))
-                repeated[f"{b.get('name')}:{args[:60]}"] += 1
+                # Keyed on the whole argument object: a 60-character prefix made 23 distinct
+                # commands that share a `cd <worktree> && ` prefix look like 15 repeats of one,
+                # and sent a whole experiment after a defect that did not exist.
+                repeated[f"{b.get('name')}:{json.dumps(b.get('arguments'), sort_keys=True)}"] += 1
                 if b.get("name") == "write" and len(args) > 2000:
                     big_writes.append((turn, len(args)))
                 if b.get("name") in ("read", "grep", "bash"):

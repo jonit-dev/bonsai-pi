@@ -8,6 +8,7 @@ import http.server
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -269,6 +270,93 @@ class ToolOutputCaps(unittest.TestCase):
         kib = int(re.search(r"DEFAULT_MAX_BYTES = (\d+) \* 1024", source).group(1))
         self.assertLessEqual(kib * 1024 / 4, 24576 * 0.25, f"{kib}KB is over a quarter of the window")
         self.assertLessEqual(lines, 500)
+
+
+DRIVER = """
+import checkAfterEdit from "__EXT__";
+const handlers = {};
+const pi = { on(event, fn) { (handlers[event] ??= []).push(fn); } };
+checkAfterEdit(pi);
+const out = await handlers.tool_result[0](
+  { toolName: "write", isError: false, content: [{ type: "text", text: "wrote the file" }] },
+  { cwd: process.cwd(), signal: undefined },
+);
+process.stdout.write(out.content.map((c) => c.text).join(""));
+"""
+
+
+def node_with_type_stripping():
+    """A node that can import a `.ts` extension: 22.19+, where stripping is on by default."""
+    nvm = Path.home() / ".nvm" / "versions" / "node"
+    candidates = [os.environ.get("BONSAI_NODE"), shutil.which("node")]
+    if nvm.is_dir():
+        candidates += [str(p / "bin" / "node") for p in sorted(nvm.iterdir(), reverse=True)]
+    for path in candidates:
+        if not path or not Path(path).is_file():
+            continue
+        try:
+            proc = subprocess.run(
+                [path, "-p", "process.versions.node"], capture_output=True, text=True, timeout=30
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        version = proc.stdout.strip()
+        if version and tuple(int(x) for x in version.split(".")[:2]) >= (22, 19):
+            return path
+    return None
+
+
+NODE = node_with_type_stripping()
+
+
+def check_advice_for(failure_text):
+    """Run the real check-after-edit extension and return what it appends to the tool result."""
+    tmp = Path(tempfile.mkdtemp(prefix="bonsai-parse-"))
+    (tmp / "check-out.txt").write_text(failure_text)
+    (tmp / "driver.mts").write_text(DRIVER.replace("__EXT__", str(REPO / "profile/check-after-edit.ts")))
+    env = dict(os.environ)
+    # `exit 1` is what makes the hook take the failure branch; the text is the check's output.
+    env["BONSAI_CHECK_COMMAND"] = f"cat {tmp / 'check-out.txt'}; exit 1"
+    proc = subprocess.run(
+        [NODE, str(tmp / "driver.mts")], capture_output=True, text=True, env=env, timeout=120, cwd=REPO
+    )
+    assert proc.returncode == 0, f"driver failed:\n{proc.stdout}\n{proc.stderr}"
+    return proc.stdout
+
+
+@unittest.skipUnless(NODE, "needs node >= 22.19 to import a .ts extension")
+class CheckParseAdvice(unittest.TestCase):
+    """A file that does not parse must be reported as the model's own syntax error.
+
+    Measured on the entity-snapshot task: the check answered `[PARSE_ERROR] Unterminated string`
+    at entity-snapshot.spec.ts:86:68, the model read it as a broken environment, and spent the
+    next fifteen turns grepping node_modules for "oxc" and "Transform failed" - it never went
+    back to its own line 86, and the 1800 s wall clock ended the run. Saying whose fault it is
+    is the whole fix, so it is worth a check that it still says so.
+    """
+
+    # The real output, colour codes and all: the escapes sit between the characters of the
+    # `╭─[` that opens the position line, so the parser has to strip them before it can read it.
+    PARSE_FAILURE = (
+        " FAIL  packages/core/__tests__/entity-snapshot.spec.ts\n"
+        "Error: Transform failed with 1 error:\n\n"
+        "\x1b[31m[PARSE_ERROR] \x1b[0mUnterminated string\n"
+        "    \x1b[38;5;246m╭\x1b[0m\x1b[38;5;246m─\x1b[0m\x1b[38;5;246m[\x1b[0m"
+        " packages/core/__tests__/entity-snapshot.spec.ts:86:68 \x1b[38;5;246m]\x1b[0m\n"
+    )
+
+    def test_a_parse_error_is_reported_as_the_models_own_syntax(self):
+        advice = check_advice_for(self.PARSE_FAILURE)
+        self.assertIn("does not parse", advice)
+        self.assertIn("entity-snapshot.spec.ts", advice)
+        self.assertIn("line 86, column 68", advice)
+        self.assertIn("not a problem with vitest, oxc", advice)
+
+    def test_a_failing_assertion_is_not_dressed_up_as_a_parse_error(self):
+        # The classification must not swallow the ordinary case, which is most of them.
+        advice = check_advice_for(" FAIL  some.spec.ts\nAssertionError: expected 1 to be 2\n")
+        self.assertNotIn("does not parse", advice)
+        self.assertIn("the check FAILS", advice)
 
 
 if __name__ == "__main__":

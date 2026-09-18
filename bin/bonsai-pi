@@ -286,8 +286,7 @@ prompt="$(cat "${HERE}/profile/bonsai.md")"$'\n\n'"$(cat "${HERE}/profile/ponyta
 # The extensions are loaded explicitly because --no-extensions disables discovery only (pi's own
 # help says so). None of them cost prompt tokens or change behaviour until their env var is set:
 # the check hook does nothing without BONSAI_CHECK_COMMAND, the read nudge nothing without
-# BONSAI_NUDGE_AFTER, the prose nudge nothing without BONSAI_NUDGE_PROSE_CHARS, the repeat
-# breaker nothing without BONSAI_MAX_REPEATS.
+# BONSAI_NUDGE_AFTER, the prose nudge nothing without BONSAI_NUDGE_PROSE_CHARS.
 pi_flags=(
   --provider bonsai
   --model "${MODEL_ID}"
@@ -296,7 +295,6 @@ pi_flags=(
   -e "${HERE}/profile/nudge-after-reads.ts"
   -e "${HERE}/profile/nudge-code-in-prose.ts"
   -e "${HERE}/profile/block-rewrite.ts"
-  -e "${HERE}/profile/block-repeats.ts"
   --system-prompt "${prompt}"
   --no-skills
   --no-extensions
