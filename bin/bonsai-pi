@@ -271,10 +271,14 @@ prompt="$(cat "${HERE}/profile/bonsai.md")"$'\n\n'"$(cat "${HERE}/profile/ponyta
 # `grep -rn ... | head` through bash: same work, worse output bounds, and an extra round trip.
 # Its schema costs 1,102 chars (~275 tokens) per request; drop it back to four with
 # --tools read,bash,edit,write if a task measures worse with it.
+#
+# The extension is loaded explicitly because --no-extensions disables discovery only (pi's own
+# help says so). It costs no prompt tokens and does nothing unless BONSAI_CHECK_COMMAND is set.
 pi_flags=(
   --provider bonsai
   --model "${MODEL_ID}"
   --tools read,grep,bash,edit,write
+  -e "${HERE}/profile/check-after-edit.ts"
   --system-prompt "${prompt}"
   --no-skills
   --no-extensions

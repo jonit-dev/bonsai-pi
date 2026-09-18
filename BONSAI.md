@@ -53,6 +53,25 @@ one token. That is the whole reason for the fork.
 | `--no-context-files` | off by default: a project's `CLAUDE.md` in this workspace is 10-22KB. `--context-files` opts back in |
 | generated `models.json` | the served model, with `contextWindow` copied from the server's `/props`, not assumed |
 | generated `settings.json` | a context budget derived from that window (below), trust defaulted, telemetry off |
+| `-e profile/check-after-edit.ts` | runs `BONSAI_CHECK_COMMAND` after every write and edit and appends the result to the tool output (below) |
+
+### The check hook
+
+A prompt rule saying "run the test" is a decision the model skips. Measured on the monorepo task
+below: it rewrote the same broken call three times, reasoning about what the test would do instead
+of running it. `profile/check-after-edit.ts` closes that loop in the harness instead of asking:
+after a successful `write` or `edit` it runs `BONSAI_CHECK_COMMAND` in the session directory and
+appends
+
+    [check: npx vitest run path/to/spec.ts exited 1 - the check FAILS]
+    ...the first 3000 characters of output...
+
+to that tool's result. The model cannot decide not to look at it, and it costs no prompt tokens —
+it only extends a result that already exists. `--no-extensions` disables discovery only, so the
+file is named explicitly with `-e`; unset the variable and the extension does nothing.
+
+Scope the command to what the task touches. It runs after every write and edit, so a full suite
+here is a full suite per change.
 
 Why `grep` is in the list: every observed run without it hand-rolled `grep -rn … | head` through
 `bash` — the same search, with worse output bounds and an extra round trip. Its schema costs

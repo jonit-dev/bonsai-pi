@@ -153,6 +153,15 @@ class GeneratedConfig(unittest.TestCase):
         self.assertIn("You are a coding agent with five tools", proc.stdout)
         self.assertIn("You are a lazy senior developer", proc.stdout)
 
+    def test_check_extension_is_loaded_explicitly(self):
+        # --no-extensions disables discovery only; the check hook has to be named or the model
+        # never sees a test result it did not ask for.
+        proc, _ = run_launcher(["--dry-run", "-p", "hi"])
+        argv = proc.stdout.split("bonsai-pi: argv:\n", 1)[1].splitlines()
+        self.assertIn("-e", argv)
+        self.assertTrue(argv[argv.index("-e") + 1].endswith("profile/check-after-edit.ts"))
+        self.assertTrue((REPO / "profile" / "check-after-edit.ts").is_file())
+
     def test_context_files_are_opt_in(self):
         proc, _ = run_launcher(["--dry-run", "--context-files", "-p", "hi"])
         self.assertNotIn("--no-context-files", proc.stdout)
