@@ -39,11 +39,12 @@ profile it is 9,992 characters, and `max_completion_tokens: 1` becomes a real an
 | generated `models.json` | the served model, with `contextWindow` copied from the server's `/props`, not assumed |
 | generated `settings.json` | a context budget derived from that window (below), trust defaulted, telemetry off |
 | `--reasoning N` | thinking budget per server turn; default 1024 |
-| `-e profile/check-after-edit.ts` | runs `BONSAI_CHECK_COMMAND` after every write/edit and appends the result to that tool's output |
+| `-e profile/check-after-edit.ts` | runs `BONSAI_CHECK_COMMAND` after every write/edit, appends the result, and stops the run after N consecutive failures |
+| `-e profile/block-rewrite.ts` | refuses a second `write` to a file this session already wrote — use `edit` (`BONSAI_BLOCK_REWRITE=0` disables) |
 | `-e profile/nudge-after-reads.ts` | one line after N calls without a successful write (`BONSAI_NUDGE_AFTER`) |
 | `-e profile/nudge-code-in-prose.ts` | one line when a reply carries a lot of code and no write (`BONSAI_NUDGE_PROSE_CHARS`) |
 
-The three extensions cost nothing until they fire, and they are inert with their variable unset —
+The four extensions cost nothing until they fire, and they are inert with their variable unset —
 so the arms of a measurement can share one launcher. `--no-extensions` disables *discovery* only;
 pi's own help says explicit `-e` paths still work, which is why they are named here.
 
@@ -61,6 +62,16 @@ BONSAI_CHECK_COMMAND='npx vitest run packages/core/__tests__/foo.spec.ts' bonsai
     …the first 3000 characters of output…
 
 Scope it to what the task touches: it runs after every write and edit.
+
+**It also has a retry policy**, because the failure mode is a loop and nothing else in the
+harness bounds it. Consecutive failures of the same check escalate: the second tells the model not
+to rewrite the file, the third demands one edit touching only the lines the error names, and the
+fifth **stops the run** — a blocked tool call with `terminate`, which ends the agent instead of
+letting it spend the rest of the afternoon failing the same way. A passing run resets the count.
+`BONSAI_CHECK_MAX_FAILURES` moves the stop (default 5).
+
+Measured, that ceiling is not hypothetical: the model rewrote one file twice at 208 s each without
+it, and burned five attempts on another module before a human killed the run.
 
 ### What changed in the source
 

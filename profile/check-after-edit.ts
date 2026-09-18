@@ -32,6 +32,14 @@ export default function checkAfterEdit(pi: ExtensionAPI): void {
 		return;
 	}
 
+	const stopAt = Number(process.env.BONSAI_CHECK_MAX_FAILURES ?? 5);
+
+	// Consecutive failures of the same check, reset by a passing run. This is the whole point:
+	// without it the blast radius is unbounded - measured, the model rewrote the same file twice
+	// at 208 s each, and burned five attempts on another module before a human killed the run.
+	let failures = 0;
+	let stopped = false;
+
 	pi.on("tool_result", async (event, ctx) => {
 		if (!MUTATING_TOOLS[event.toolName] || event.isError) {
 			return undefined;
@@ -55,10 +63,46 @@ export default function checkAfterEdit(pi: ExtensionAPI): void {
 			outcome.output.length > MAX_OUTPUT_CHARS
 				? `${outcome.output.slice(0, MAX_OUTPUT_CHARS)}\n[check output truncated]`
 				: outcome.output;
-		const verdict = outcome.code === 0 ? "exited 0" : `exited ${outcome.code} - the check FAILS`;
+
+		if (outcome.code === 0) {
+			failures = 0;
+			return {
+				content: [...event.content, { type: "text" as const, text: `\n\n[check: ${command} exited 0]\n${body}` }],
+			};
+		}
+
+		failures += 1;
+		const verdict = `exited ${outcome.code} - the check FAILS`;
+		let advice = "";
+		if (failures >= stopAt) {
+			stopped = true;
+			advice = `\n\n[this check has failed ${failures} times in a row. Stop changing code and report what you ` +
+				`have: the last error, what you tried, and what you think the cause is.]`;
+		} else if (failures >= 3) {
+			advice = `\n\n[${failures} failures in a row. Change only the lines the error names, with one edit, ` +
+				`and nothing else.]`;
+		} else if (failures >= 2) {
+			advice = `\n\n[second failure. Do not rewrite the file - fix only what the error names.]`;
+		}
 
 		return {
-			content: [...event.content, { type: "text" as const, text: `\n\n[check: ${command} ${verdict}]\n${body}` }],
+			content: [
+				...event.content,
+				{ type: "text" as const, text: `\n\n[check: ${command} ${verdict}]\n${body}${advice}` },
+			],
+		};
+	});
+
+	// The stop itself: the next call that would change code is refused and ends the run, so a
+	// loop costs one attempt rather than the rest of the card's afternoon.
+	pi.on("tool_call", async (event) => {
+		if (!stopped || !MUTATING_TOOLS[event.toolName]) {
+			return undefined;
+		}
+		return {
+			block: true,
+			terminate: true,
+			reason: `The check has failed ${failures} consecutive times. Stopping instead of trying again.`,
 		};
 	});
 }

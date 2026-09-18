@@ -150,6 +150,57 @@ The rule for the next change: one at a time, on a task where the model has to fi
 number to watch is **wall time per correctly completed task** — a smaller prompt that buys another
 repair cycle is not a saving.
 
+## Why the model rewrites instead of editing
+
+Measured across the 13 sessions recorded here:
+
+| tool | calls | errors |
+|---|--:|--:|
+| read | 79 | 1 |
+| bash | 73 | 13 |
+| **write** | **16** | 0 |
+| **edit** | **9** | **1** |
+
+So no tool is missing and `edit` is not broken — it is used, and it failed once in nine (the one
+failure was `oldText` not matching). The model rewrites for a different reason: after it has just
+written a file, the whole content is sitting in its context, so reproducing it is the move it is
+most certain about, and nothing stops it. On this card that choice costs 208 seconds.
+
+Three things push back, in order of strength:
+
+1. **`profile/block-rewrite.ts`** — a `write` to a path this session has already written is
+   refused, with a reason naming `edit`. The first write of any path is untouched, and `edit` is
+   never restricted. Structural, because prose did not hold: the profile already said "send only
+   the lines that change" and the model rewrote a 186-line file twice anyway.
+2. **The retry policy in `check-after-edit.ts`** — consecutive failures escalate, and the fifth
+   stops the run rather than letting it loop.
+3. **The profile rule** — a rule that stays prose is a rule it violates, so this is the weakest of
+   the three and is kept only because it costs nothing.
+
+## The prose turn
+
+The most expensive single turn observed, where the rule above *does* appear to hold:
+
+| | |
+|---|---|
+| wall clock | **239 s** |
+| output tokens | 4,299 |
+| thinking | 1,711 chars |
+| **prose in the reply** | **13,246 chars — the entire test file** |
+| tool call | `bash`, 301 chars |
+
+That turn ran in an arm without the "never write code into your reply" rule. In the next arm, with
+the rule in the prompt, `prose` was **0 characters on eight consecutive turns** and the 239 s turn
+did not recur. First eight turns of each arm:
+
+| arm | turn gaps | sum |
+|---|---|--:|
+| without the rule | 15, 8, 8, 14, 31, **239**, 107, 152 | 574 s |
+| with the rule | 19, 15, 8, 8, 66, 79, 13, 170 | **378 s** |
+
+One sample each, so this is suggestive rather than proven; the `nudge-code-in-prose.ts` extension
+is the net for when the rule fails, and never fired in that arm.
+
 ## Acceptance runs
 
 ### `tasks/easy-api` (single-file Python HTTP API, 4 tests)
