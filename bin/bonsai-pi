@@ -31,6 +31,9 @@ PORT="${BONSAI_PORT:-8090}"
 CONTEXT="${BONSAI_CONTEXT:-24576}"
 MODEL="${BONSAI_MODEL:-$HOME/projects/bonsai2-cuda/models/Ternary-Bonsai-2-27B-PTQ1_0.gguf}"
 MODEL_ID="${BONSAI_MODEL_ID:-bonsai}"
+# Tokens the model may spend inside its thinking channel before the server closes it. Measured:
+# 1024 costs ~35 s of thinking per exploration turn, 512 ~15 s, on the same task. See BONSAI.md.
+REASONING="${BONSAI_REASONING_BUDGET:-1024}"
 MIN_NODE="22.19.0"
 CLI="$HERE/packages/coding-agent/dist/bundle/cli.js"
 
@@ -63,6 +66,7 @@ bonsai options (everything else goes to pi):
   --server-host HOST   llama-server address; another machine's IP to use its GPU
   --port N             llama-server port (default 8090)
   --ctx N              context window to load when starting the server (default 24576)
+  --reasoning N        thinking budget per turn in tokens (default 1024; 512 measured faster)
   --context-files      let pi load the project's AGENTS.md/CLAUDE.md too
   --stop               stop the llama-server this script started
   --dry-run            print the resolved command and generated configs, start nothing
@@ -77,6 +81,8 @@ while (($#)); do
     --port) PORT="${2:?--port needs a value}"; shift 2 ;;
     --ctx=*) CONTEXT="${1#*=}"; shift ;;
     --ctx) CONTEXT="${2:?--ctx needs a value}"; shift 2 ;;
+    --reasoning=*) REASONING="${1#*=}"; shift ;;
+    --reasoning) REASONING="${2:?--reasoning needs a value}"; shift 2 ;;
     --context-files) context_files=true; shift ;;
     --stop) stop=true; shift ;;
     --dry-run) dry_run=true; shift ;;
@@ -87,6 +93,9 @@ done
 
 case "$CONTEXT" in
   ''|*[!0-9]*) echo "bonsai-pi: --ctx must be a number, got '$CONTEXT'" >&2; exit 2 ;;
+esac
+case "$REASONING" in
+  ''|*[!0-9]*) echo "bonsai-pi: --reasoning must be a number of tokens, got '$REASONING'" >&2; exit 2 ;;
 esac
 
 server_url="http://${SERVER_HOST}:${PORT}"
@@ -161,7 +170,7 @@ if ! up; then
     echo "bonsai-pi: would start: PORT=${PORT} CONTEXT=${CONTEXT} ${HERE}/scripts/run-server.sh"
   else
     echo "bonsai-pi: starting llama-server on :${PORT} at ${CONTEXT} context (log: ${SERVER_LOG})" >&2
-    PORT="${PORT}" CONTEXT="${CONTEXT}" MODEL="${MODEL}" nohup "${HERE}/scripts/run-server.sh" >"${SERVER_LOG}" 2>&1 &
+    PORT="${PORT}" CONTEXT="${CONTEXT}" MODEL="${MODEL}" REASONING_BUDGET="${REASONING}" nohup "${HERE}/scripts/run-server.sh" >"${SERVER_LOG}" 2>&1 &
     echo $! >"${PIDFILE}"
     for _ in $(seq 120); do
       up && break
@@ -272,13 +281,15 @@ prompt="$(cat "${HERE}/profile/bonsai.md")"$'\n\n'"$(cat "${HERE}/profile/ponyta
 # Its schema costs 1,102 chars (~275 tokens) per request; drop it back to four with
 # --tools read,bash,edit,write if a task measures worse with it.
 #
-# The extension is loaded explicitly because --no-extensions disables discovery only (pi's own
-# help says so). It costs no prompt tokens and does nothing unless BONSAI_CHECK_COMMAND is set.
+# The extensions are loaded explicitly because --no-extensions disables discovery only (pi's own
+# help says so). Both cost no prompt tokens: the check hook does nothing without
+# BONSAI_CHECK_COMMAND, the nudge nothing without BONSAI_NUDGE_AFTER.
 pi_flags=(
   --provider bonsai
   --model "${MODEL_ID}"
   --tools read,grep,bash,edit,write
   -e "${HERE}/profile/check-after-edit.ts"
+  -e "${HERE}/profile/nudge-after-reads.ts"
   --system-prompt "${prompt}"
   --no-skills
   --no-extensions

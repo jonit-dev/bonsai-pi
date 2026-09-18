@@ -154,13 +154,16 @@ class GeneratedConfig(unittest.TestCase):
         self.assertIn("You are a lazy senior developer", proc.stdout)
 
     def test_check_extension_is_loaded_explicitly(self):
-        # --no-extensions disables discovery only; the check hook has to be named or the model
-        # never sees a test result it did not ask for.
+        # --no-extensions disables discovery only; the hooks have to be named or the model never
+        # sees a test result it did not ask for.
         proc, _ = run_launcher(["--dry-run", "-p", "hi"])
         argv = proc.stdout.split("bonsai-pi: argv:\n", 1)[1].splitlines()
-        self.assertIn("-e", argv)
-        self.assertTrue(argv[argv.index("-e") + 1].endswith("profile/check-after-edit.ts"))
-        self.assertTrue((REPO / "profile" / "check-after-edit.ts").is_file())
+        loaded = [argv[i + 1] for i, a in enumerate(argv) if a == "-e"]
+        self.assertEqual(len(loaded), 2, loaded)
+        self.assertTrue(loaded[0].endswith("profile/check-after-edit.ts"))
+        self.assertTrue(loaded[1].endswith("profile/nudge-after-reads.ts"))
+        for path in loaded:
+            self.assertTrue(Path(path).is_file(), path)
 
     def test_context_files_are_opt_in(self):
         proc, _ = run_launcher(["--dry-run", "--context-files", "-p", "hi"])
@@ -210,6 +213,13 @@ class Guards(unittest.TestCase):
     def test_rejects_a_non_numeric_context(self):
         proc, _ = run_launcher(["--ctx", "lots"], expect=2)
         self.assertIn("--ctx must be a number", proc.stderr)
+
+    def test_reasoning_budget_is_a_flag(self):
+        # It was env-only; the A/B that showed 512 halves thinking time made it worth a flag.
+        proc, _ = run_launcher(["--dry-run", "--reasoning", "512", "-p", "hi"])
+        self.assertIn("context from server", proc.stdout)  # still a dry run, nothing started
+        proc, _ = run_launcher(["--reasoning", "lots"], expect=2)
+        self.assertIn("--reasoning must be a number", proc.stderr)
 
 
 class RemoteServer(unittest.TestCase):
