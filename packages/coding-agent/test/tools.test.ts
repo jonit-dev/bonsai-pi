@@ -17,6 +17,7 @@ import { createFindToolDefinition } from "../src/core/tools/find.ts";
 import { createGrepToolDefinition } from "../src/core/tools/grep.ts";
 import { createLsToolDefinition } from "../src/core/tools/ls.ts";
 import { createReadToolDefinition } from "../src/core/tools/read.ts";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "../src/core/tools/truncate.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
 import {
 	createEditTool,
@@ -99,30 +100,39 @@ describe("Coding Agent Tools", () => {
 
 		it("should truncate files exceeding line limit", async () => {
 			const testFile = join(testDir, "large.txt");
-			const lines = Array.from({ length: 2500 }, (_, i) => `Line ${i + 1}`);
+			const total = DEFAULT_MAX_LINES + 500;
+			const lines = Array.from({ length: total }, (_, i) => `Line ${i + 1}`);
 			writeFileSync(testFile, lines.join("\n"));
 
 			const result = await readTool.execute("test-call-3", { path: testFile });
 			const output = getTextOutput(result);
 
 			expect(output).toContain("Line 1");
-			expect(output).toContain("Line 2000");
-			expect(output).not.toContain("Line 2001");
-			expect(output).toContain("[Showing lines 1-2000 of 2500. Use offset=2001 to continue.]");
+			expect(output).toContain(`Line ${DEFAULT_MAX_LINES}`);
+			expect(output).not.toContain(`Line ${DEFAULT_MAX_LINES + 1}`);
+			expect(output).toContain(
+				`[Showing lines 1-${DEFAULT_MAX_LINES} of ${total}. Use offset=${DEFAULT_MAX_LINES + 1} to continue.]`,
+			);
 		});
 
 		it("should truncate when byte limit exceeded", async () => {
 			const testFile = join(testDir, "large-bytes.txt");
-			// Create file that exceeds 50KB byte limit but has fewer than 2000 lines
-			const lines = Array.from({ length: 500 }, (_, i) => `Line ${i + 1}: ${"x".repeat(200)}`);
+			// More bytes than the byte limit, fewer lines than the line limit, so bytes decide.
+			const charsPerLine = 512;
+			const lineCount = Math.ceil(DEFAULT_MAX_BYTES / charsPerLine) + 10;
+			expect(lineCount).toBeLessThan(DEFAULT_MAX_LINES);
+			const lines = Array.from({ length: lineCount }, (_, i) => `Line ${i + 1}: ${"x".repeat(charsPerLine)}`);
 			writeFileSync(testFile, lines.join("\n"));
 
 			const result = await readTool.execute("test-call-4", { path: testFile });
 			const output = getTextOutput(result);
 
+			expect(result.details?.truncation?.truncatedBy).toBe("bytes");
 			expect(output).toContain("Line 1:");
 			// Should show byte limit message
-			expect(output).toMatch(/\[Showing lines 1-\d+ of 500 \(.* limit\)\. Use offset=\d+ to continue\.\]/);
+			expect(output).toMatch(
+				new RegExp(`\\[Showing lines 1-\\d+ of ${lineCount} \\(.* limit\\)\\. Use offset=\\d+ to continue\\.\\]`),
+			);
 		});
 
 		it("should handle offset parameter", async () => {
@@ -194,7 +204,7 @@ describe("Coding Agent Tools", () => {
 			expect(result.details?.truncation?.truncated).toBe(true);
 			expect(result.details?.truncation?.truncatedBy).toBe("lines");
 			expect(result.details?.truncation?.totalLines).toBe(2500);
-			expect(result.details?.truncation?.outputLines).toBe(2000);
+			expect(result.details?.truncation?.outputLines).toBe(DEFAULT_MAX_LINES);
 		});
 
 		it("should detect image MIME type from file magic (not extension)", async () => {
@@ -736,10 +746,11 @@ describe("Coding Agent Tools", () => {
 			const output = getTextOutput(result);
 
 			expect(result.details?.truncation?.totalLines).toBe(4000);
-			expect(result.details?.truncation?.outputLines).toBe(2000);
-			expect(output).toContain("line-2001");
+			expect(result.details?.truncation?.outputLines).toBe(DEFAULT_MAX_LINES);
+			const firstShown = 4000 - DEFAULT_MAX_LINES + 1;
+			expect(output).toContain(`line-${String(firstShown).padStart(4, "0")}`);
 			expect(output).toContain("line-4000");
-			expect(output).toMatch(/\[Showing lines 2001-4000 of 4000\. Full output: /);
+			expect(output).toMatch(new RegExp(`\\[Showing lines ${firstShown}-4000 of 4000\\. Full output: `));
 			expect(output).not.toContain("4001");
 		});
 

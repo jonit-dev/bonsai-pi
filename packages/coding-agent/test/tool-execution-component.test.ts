@@ -7,6 +7,7 @@ import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
 import { withBuiltInRenderers } from "../src/core/tools/renderers/index.ts";
+import { DEFAULT_MAX_LINES } from "../src/core/tools/truncate.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -192,8 +193,8 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered.match(/Full output:/g)?.length ?? 0).toBe(1);
 		expect(rendered).toMatch(/line-4000[^\n]*\n[^\S\n]*\n \[Full output:/);
 		expect(rendered).not.toMatch(/line-4000[^\n]*\n[^\S\n]*\n[^\S\n]*\n \[Full output:/);
-		expect(rendered).toContain("Truncated: showing 2000 of 4000 lines");
-		expect(rendered).not.toContain("[Showing lines 2001-4000 of 4000. Full output:");
+		expect(rendered).toContain(`Truncated: showing ${DEFAULT_MAX_LINES} of 4000 lines`);
+		expect(rendered).not.toContain(`[Showing lines ${4000 - DEFAULT_MAX_LINES + 1}-4000 of 4000. Full output:`);
 	});
 
 	// Issue #9628: keep short durations precise and make long shell durations readable.

@@ -104,6 +104,22 @@ export async function executeBashWithOperations(
 		}
 	};
 
+	// The caller is handed `fullOutputPath` and reads it straight away - that is what the model
+	// does with it - so the write has to be on disk before the result is returned. `end()`
+	// alone only queues it, which made the file read back empty for output that was truncated
+	// late (observed with `seq 3000` at the 400-line cap).
+	const closeTempFile = async (): Promise<void> => {
+		const stream = tempFileStream;
+		if (!stream) {
+			return;
+		}
+		await new Promise<void>((resolve, reject) => {
+			stream.once("error", reject);
+			stream.once("finish", resolve);
+			stream.end();
+		});
+	};
+
 	try {
 		const result = await operations.exec(command, cwd, {
 			onData,
@@ -115,9 +131,7 @@ export async function executeBashWithOperations(
 		if (truncationResult.truncated) {
 			ensureTempFile();
 		}
-		if (tempFileStream) {
-			tempFileStream.end();
-		}
+		await closeTempFile();
 		const cancelled = options?.signal?.aborted ?? false;
 
 		return {
@@ -147,9 +161,7 @@ export async function executeBashWithOperations(
 			};
 		}
 
-		if (tempFileStream) {
-			tempFileStream.end();
-		}
+		await closeTempFile();
 
 		throw err;
 	}

@@ -2,14 +2,19 @@
  * Shared truncation utilities for tool outputs.
  *
  * Truncation is based on two independent limits - whichever is hit first wins:
- * - Line limit (default: 2000 lines)
- * - Byte limit (default: 50KB)
+ * - Line limit (default: 400 lines)
+ * - Byte limit (default: 8KB)
+ *
+ * The defaults are tuned for the 24576-token window bonsai-pi runs with, not for a hosted
+ * model: one tool result must not eat a fifth of the window, and the assistant's own read of
+ * it costs decode time at ~25 tokens/s. Upstream pi ships 2000 lines / 50KB, which is 12k+
+ * tokens of a single result.
  *
  * Never returns partial lines (except bash tail truncation edge case).
  */
 
-export const DEFAULT_MAX_LINES = 2000;
-export const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
+export const DEFAULT_MAX_LINES = 400;
+export const DEFAULT_MAX_BYTES = 8 * 1024; // 8KB
 export const GREP_MAX_LINE_LENGTH = 500; // Max chars per grep match line
 
 export interface TruncationResult {
