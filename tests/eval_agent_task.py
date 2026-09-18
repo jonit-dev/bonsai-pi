@@ -54,6 +54,47 @@ def reset_worktree() -> None:
         raise SystemExit(f"worktree is not clean before the trial:\n{dirty}")
 
 
+def server_up() -> bool:
+    try:
+        return subprocess.run(["curl", "-fsS", "--max-time", "3", "http://127.0.0.1:8090/health"],
+                              capture_output=True, timeout=10).returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def stop_server() -> None:
+    subprocess.run(["pkill", "-f", "llama-server -m"], capture_output=True)
+    for _ in range(30):
+        if not server_up():
+            return
+        time.sleep(1)
+
+
+def start_server() -> None:
+    (REPO / "docs/autoresearch").mkdir(parents=True, exist_ok=True)
+    log = (REPO / "docs/autoresearch/logs/llama-server.log").open("a")
+    subprocess.Popen(["setsid", "nohup", str(REPO / "scripts/run-server.sh")],
+                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    for _ in range(150):
+        if server_up():
+            return
+        time.sleep(2)
+    raise SystemExit("llama-server did not come up within 5 minutes")
+
+
+def fresh_server() -> None:
+    """Every trial starts from the same server state, and only one client owns the slot.
+
+    llama-server runs with -np 1. A trial that was killed left its request generating into a
+    dead socket, occupying the only slot, so the next trial's request simply queued - the run
+    looked hung while the GPU churned tokens for nobody, and the numbers meant nothing. Health
+    is not enough here: the server has to be restarted, which also removes any KV left over
+    from the previous trial.
+    """
+    stop_server()
+    start_server()
+
+
 def verify() -> bool:
     """Independent of the agent: run the check ourselves."""
     r = subprocess.run(["npx", "vitest", "run", "packages/core/__tests__/entity-snapshot.spec.ts"],
@@ -134,6 +175,7 @@ def main() -> int:
     log = LOGS / f"trial-{args.trial}.log"
 
     reset_worktree()
+    fresh_server()
     started = time.time()
     proc = subprocess.Popen(
         [str(REPO / "bin/bonsai-pi"), "-p", TASK],
@@ -149,9 +191,12 @@ def main() -> int:
         proc.kill()
         status = "timeout"
 
+    if not server_up():
+        status = "invalid"  # the model server died under the run; the numbers mean nothing
+
     session = newest_session(started)
     m = parse(session) if session else {}
-    passed = verify()
+    passed = verify() and status == "ok"
 
     row = {
         "experiment": args.trial,
