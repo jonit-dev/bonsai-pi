@@ -1,3 +1,7 @@
+> **This checkout is [bonsai-pi](BONSAI.md)** — a fork of pi tuned to drive Ternary Bonsai 2
+> 27B on an 8 GB GPU, with a lean tool set, a context budget sized to the real window, and a
+> launcher that starts the model server. Read BONSAI.md first. Everything below is upstream's.
+
 <p align="center">
   <a href="https://pi.dev">
     <img alt="pi logo" src="https://pi.dev/logo-auto.svg" width="128">

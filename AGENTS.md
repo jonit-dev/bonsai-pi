@@ -1,3 +1,22 @@
+# This checkout is bonsai-pi
+
+A fork of pi tuned to drive Ternary Bonsai 2 27B on an 8 GB GPU. Read [BONSAI.md](BONSAI.md)
+before changing anything: it lists the fork's whole surface (`bin/`, `profile/`, `scripts/`,
+`tests/`, and two source changes) and the measurements behind them. Everything not listed there
+is upstream pi and should stay mergeable with it.
+
+Changes here are held to the ponytail ruleset embedded at [profile/ponytail.md](profile/ponytail.md)
+— it is also concatenated into the model's system prompt by `bin/bonsai-pi`, so it is a shipped
+artifact, not just advice. The ladder, before writing any code:
+
+1. Does this need to be built at all? (YAGNI)
+2. Already in this codebase? Reuse it.
+3. Standard library does it? Use it.
+4. Native platform feature covers it? Use it.
+5. An installed dependency solves it? Use it.
+6. Can it be one line? One line.
+7. Only then: the minimum that works. Never cut validation, error handling, security, or accessibility.
+
 # Development Rules
 
 ## Conversational Style

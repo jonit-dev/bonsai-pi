@@ -24,6 +24,9 @@ packages/ai/src/providers/.model-generation-*/
 *.swo
 *~
 
+# Python (tests/test_bonsai_pi.py)
+__pycache__/
+
 # Package specific
 .npm/
 coverage/

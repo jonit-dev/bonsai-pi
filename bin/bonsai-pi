@@ -1,0 +1,284 @@
+#!/usr/bin/env bash
+# bonsai-pi - the pi coding agent driven by the local Bonsai 2 27B on one 8 GB card.
+#
+#   bonsai-pi                              interactive pi TUI on the local model
+#   bonsai-pi -p "fix the failing test"    one-shot, non-interactive
+#   bonsai-pi --ctx 16384                  load the server with a smaller window
+#   bonsai-pi --server-host=192.168.1.9 --port=8090     use another machine's GPU
+#   bonsai-pi --context-files              also load AGENTS.md/CLAUDE.md (off: they are large)
+#   bonsai-pi --stop                       stop the llama-server this script started
+#   bonsai-pi --dry-run                    print the resolved command and configs, start nothing
+#
+# Everything this script does not recognise is forwarded to pi unchanged, so `pi --help`
+# documents the rest. The server is started on demand when it is local and not already up.
+#
+# Why the flags below exist: a 24576-token window is the binding constraint on this card, and
+# pi's defaults spend it before the first user message. Measured on this machine with the
+# stock defaults, the first request was 88522 characters (~22k estimated tokens) - skills
+# discovery alone contributed 220 skill blocks. The profile cuts the first turn to ~2.2k
+# tokens: four tools, no skills, no extensions, no project context files, a 900-character
+# prompt, and tool output capped at 8KB instead of 50KB.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/bonsai-pi"
+SERVER_LOG="$STATE/llama-server.log"
+PIDFILE="$STATE/llama-server.pid"
+PI_HOME="$STATE/pi-home"
+
+SERVER_HOST="${BONSAI_SERVER_HOST:-127.0.0.1}"
+PORT="${BONSAI_PORT:-8090}"
+CONTEXT="${BONSAI_CONTEXT:-24576}"
+MODEL="${BONSAI_MODEL:-$HOME/projects/bonsai2-cuda/models/Ternary-Bonsai-2-27B-PTQ1_0.gguf}"
+MODEL_ID="${BONSAI_MODEL_ID:-bonsai}"
+MIN_NODE="22.19.0"
+CLI="$HERE/packages/coding-agent/dist/bundle/cli.js"
+
+# Nothing here is sized for one card: the check below is the model's own size plus measured
+# overhead, so the same script runs on any GPU that is big enough and refuses on one that is
+# not. Calibrated on an 8 GB RTX 2080 (Turing, sm_75) at 24576 context, where llama-server
+# holds 6252 MiB for a 5671 MiB model - the extra 581 MiB is the CUDA context, KV and compute
+# buffers - and uses about 760 MiB more once a run is deep. Overhead and headroom are the two
+# knobs to move on other hardware; see BONSAI.md.
+OVERHEAD_MIB="${BONSAI_OVERHEAD_MIB:-600}"
+HEADROOM_MIB="${BONSAI_HEADROOM_MIB:-800}"
+
+# The weights have to fit even before the overhead: a load into 5898 MiB of free card failed
+# outright on this model's 5395 MiB weight allocation.
+MODEL_MIB=0
+if [ -f "${MODEL}" ]; then
+  MODEL_MIB=$(( $(stat -c %s "${MODEL}") / 1048576 ))
+fi
+
+context_files=false
+stop=false
+dry_run=false
+pi_args=()
+
+usage() {
+  sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  cat <<'EOF'
+
+bonsai options (everything else goes to pi):
+  --server-host HOST   llama-server address; another machine's IP to use its GPU
+  --port N             llama-server port (default 8090)
+  --ctx N              context window to load when starting the server (default 24576)
+  --context-files      let pi load the project's AGENTS.md/CLAUDE.md too
+  --stop               stop the llama-server this script started
+  --dry-run            print the resolved command and generated configs, start nothing
+EOF
+}
+
+while (($#)); do
+  case "$1" in
+    --server-host=*) SERVER_HOST="${1#*=}"; shift ;;
+    --server-host) SERVER_HOST="${2:?--server-host needs a value}"; shift 2 ;;
+    --port=*) PORT="${1#*=}"; shift ;;
+    --port) PORT="${2:?--port needs a value}"; shift 2 ;;
+    --ctx=*) CONTEXT="${1#*=}"; shift ;;
+    --ctx) CONTEXT="${2:?--ctx needs a value}"; shift 2 ;;
+    --context-files) context_files=true; shift ;;
+    --stop) stop=true; shift ;;
+    --dry-run) dry_run=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) pi_args+=("$1"); shift ;;
+  esac
+done
+
+case "$CONTEXT" in
+  ''|*[!0-9]*) echo "bonsai-pi: --ctx must be a number, got '$CONTEXT'" >&2; exit 2 ;;
+esac
+
+server_url="http://${SERVER_HOST}:${PORT}"
+is_local=false
+case "${SERVER_HOST}" in
+  127.0.0.1|localhost|::1) is_local=true ;;
+esac
+
+# --max-time matters: without it an unreachable remote host hangs until curl gives up.
+up() { curl -fsS --max-time 3 "${server_url}/health" >/dev/null 2>&1; }
+
+if [[ "${stop}" == true ]]; then
+  if [[ -f "${PIDFILE}" ]] && kill -0 "$(cat "${PIDFILE}")" 2>/dev/null; then
+    kill "$(cat "${PIDFILE}")" && echo "bonsai-pi: stopped llama-server pid $(cat "${PIDFILE}")"
+    rm -f "${PIDFILE}"
+  else
+    rm -f "${PIDFILE}"
+    echo "bonsai-pi: no llama-server started by this script is running"
+  fi
+  exit 0
+fi
+
+# pi 0.85 needs node >= 22.19; the distro nvm default here is 20, so find one instead of
+# failing with a stack trace the user cannot act on.
+node_ok() { [ -n "$1" ] && [ -x "$1" ] && [ "$(printf '%s\n%s\n' "$MIN_NODE" "$("$1" -p 'process.versions.node' 2>/dev/null)" | sort -V | head -1)" = "$MIN_NODE" ]; }
+find_node() {
+  local cand
+  for cand in "${BONSAI_NODE:-}" "$(command -v node || true)"; do
+    if node_ok "$cand"; then printf '%s' "$cand"; return 0; fi
+  done
+  for cand in $(ls -d "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin/node 2>/dev/null | sort -V); do
+    if node_ok "$cand"; then printf '%s' "$cand"; return 0; fi
+  done
+  return 1
+}
+
+if [[ ! -f "${CLI}" ]]; then
+  echo "bonsai-pi: no build at ${CLI}" >&2
+  echo "bonsai-pi: run:  npm ci && npm run build" >&2
+  exit 1
+fi
+
+if ! up; then
+  if [[ "${is_local}" != true ]]; then
+    # --server-host is another machine's card: never start a server here, and never read this
+    # card's free VRAM for it. Down means down - say what to run over there and stop.
+    echo "bonsai-pi: no llama-server at ${server_url}" >&2
+    echo "bonsai-pi: start one on that machine with: HOST=0.0.0.0 PORT=${PORT} scripts/run-server.sh" >&2
+    exit 1
+  fi
+  if [[ "${dry_run}" != true ]]; then
+    free_mib="$(nvidia-smi --query-gpu=memory.total,memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | awk -F', *' '{print $1-$2}')"
+    need_mib=$(( MODEL_MIB + OVERHEAD_MIB ))
+    if [[ -n "${free_mib}" ]] && (( MODEL_MIB > 0 )); then
+      if (( free_mib < need_mib )); then
+        echo "bonsai-pi: ${free_mib} MiB free, ${need_mib} MiB needed for ${MODEL_MIB} MiB of weights" >&2
+        echo "bonsai-pi: plus ${OVERHEAD_MIB} MiB of CUDA context, KV and compute buffers:" >&2
+        nvidia-smi --query-compute-apps=pid,used_memory,process_name --format=csv,noheader 2>/dev/null | sed 's/^/bonsai-pi:   /' >&2
+        echo "bonsai-pi: free some, start a smaller window with --ctx, or override with" >&2
+        echo "bonsai-pi: BONSAI_OVERHEAD_MIB=<MiB> / BONSAI_HEADROOM_MIB=<MiB> if you know better." >&2
+        exit 1
+      fi
+      if (( free_mib < need_mib + HEADROOM_MIB )); then
+        echo "bonsai-pi: ${free_mib} MiB free, ${need_mib} MiB needed; it will load, but a long" >&2
+        echo "bonsai-pi: run wants about ${HEADROOM_MIB} MiB more than that. Close something if it" >&2
+        echo "bonsai-pi: dies mid-answer, or start a smaller window with --ctx." >&2
+      fi
+    fi
+  fi
+  mkdir -p "${STATE}"
+  if [[ "${dry_run}" == true ]]; then
+    echo "bonsai-pi: would start: PORT=${PORT} CONTEXT=${CONTEXT} ${HERE}/scripts/run-server.sh"
+  else
+    echo "bonsai-pi: starting llama-server on :${PORT} at ${CONTEXT} context (log: ${SERVER_LOG})" >&2
+    PORT="${PORT}" CONTEXT="${CONTEXT}" MODEL="${MODEL}" nohup "${HERE}/scripts/run-server.sh" >"${SERVER_LOG}" 2>&1 &
+    echo $! >"${PIDFILE}"
+    for _ in $(seq 120); do
+      up && break
+      sleep 2
+      kill -0 "$(cat "${PIDFILE}")" 2>/dev/null || {
+        echo "bonsai-pi: llama-server died, see ${SERVER_LOG}" >&2
+        tail -20 "${SERVER_LOG}" >&2
+        rm -f "${PIDFILE}"
+        exit 1
+      }
+    done
+    up || { echo "bonsai-pi: llama-server did not come up in 4 min, see ${SERVER_LOG}" >&2; exit 1; }
+    echo "bonsai-pi: llama-server ready" >&2
+  fi
+fi
+
+# Ask the server what window it actually loaded instead of assuming one: the client's
+# contextWindow drives both the compaction trigger and the per-request output clamp, and a
+# client budgeted against a window the server does not have is refused outright.
+loaded_ctx=""
+if up; then
+  loaded_ctx="$(curl -fsS --max-time 5 "${server_url}/props" 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("default_generation_settings",{}).get("n_ctx",""))' 2>/dev/null \
+    || true)"
+fi
+ctx="${CONTEXT}"
+if [[ "${loaded_ctx}" =~ ^[0-9]+$ ]] && (( loaded_ctx > 0 )); then
+  ctx="${loaded_ctx}"
+fi
+
+# One third of the window is reserved for the answer: the compaction trigger fires at
+# ctx - reserve, and pi clamps max_completion_tokens to what is left after the prompt and a
+# 4096-token safety margin, so a prompt that grows to the trigger still leaves the model room
+# to write a whole file. keepRecent is what stays verbatim through a compaction; it must be
+# below the trigger or compaction would fire again immediately.
+reserve=$(( ctx / 3 ))
+keep_recent=$(( ctx / 8 ))
+max_output=$(( ctx / 3 ))
+(( max_output > 8192 )) && max_output=8192
+
+run_home="${PI_HOME}"
+if [[ "${dry_run}" == true ]]; then
+  run_home="${STATE}/pi-home"
+  echo "bonsai-pi: context from server: ${ctx}"
+fi
+
+mkdir -p "${run_home}"
+cat >"${run_home}/models.json" <<EOF
+{
+  "providers": {
+    "bonsai": {
+      "baseUrl": "${server_url}/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false,
+        "maxTokensField": "max_tokens"
+      },
+      "models": [
+        {
+          "id": "${MODEL_ID}",
+          "name": "Bonsai 2 27B (local)",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": ${ctx},
+          "maxTokens": ${max_output},
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }
+      ]
+    }
+  }
+}
+EOF
+cat >"${run_home}/settings.json" <<EOF
+{
+  "compaction": { "enabled": true, "reserveTokens": ${reserve}, "keepRecentTokens": ${keep_recent} },
+  "defaultProvider": "bonsai",
+  "defaultModel": "${MODEL_ID}",
+  "defaultProjectTrust": "always",
+  "enableSkillCommands": false,
+  "quietStartup": true,
+  "enableInstallTelemetry": false,
+  "enableAnalytics": false
+}
+EOF
+
+node_bin="$(find_node)" || {
+  echo "bonsai-pi: need node >= ${MIN_NODE} (found: $(node -v 2>/dev/null || echo none))" >&2
+  echo "bonsai-pi: install one, or point BONSAI_NODE at it" >&2
+  exit 1
+}
+
+prompt="$(cat "${HERE}/profile/bonsai.md")"$'\n\n'"$(cat "${HERE}/profile/ponytail.md")"
+
+# --tools is a strict allowlist over built-in and extension tools alike, so the four tools
+# here are the entire tool surface the model is shown.
+pi_flags=(
+  --provider bonsai
+  --model "${MODEL_ID}"
+  --tools read,bash,edit,write
+  --system-prompt "${prompt}"
+  --no-skills
+  --no-extensions
+  --no-prompt-templates
+  --no-themes
+)
+[[ "${context_files}" == true ]] || pi_flags+=(--no-context-files)
+
+if [[ "${dry_run}" == true ]]; then
+  echo "bonsai-pi: PI_CODING_AGENT_DIR=${run_home}"
+  echo "bonsai-pi: node=${node_bin}"
+  # One argument per line, unquoted, so this can be diffed and asserted on.
+  echo "bonsai-pi: argv:"
+  printf '%s\n' "${node_bin}" "${CLI}" "${pi_flags[@]}" ${pi_args[@]+"${pi_args[@]}"}
+  exit 0
+fi
+
+export PI_CODING_AGENT_DIR="${run_home}"
+exec "${node_bin}" "${CLI}" ${pi_flags[@]+"${pi_flags[@]}"} ${pi_args[@]+"${pi_args[@]}"}
