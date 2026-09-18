@@ -172,8 +172,8 @@ falls off a cliff.
 This part is not a preference. From bonsai-codex, which hit all of it:
 
 - **`PTQ1_0` needs the [PrismML llama.cpp fork](https://github.com/PrismML-Eng/llama.cpp).**
-  Stock llama.cpp and Ollama cannot read `PTQ1_0` or `PQ2_0` and refuse them. `BONSAI_FORK`
-  points the server script at a build of that fork.
+  Stock llama.cpp and Ollama cannot read `PTQ1_0` or `PQ2_0` and refuse them. `FORK` points the
+  server script at a build of that fork; `MODEL` points it at the GGUF.
 - **Do not reach for `Q2_0` instead.** It loads without a warning and produces gibberish: there
   is no Hadamard activation runtime behind that band.
 - **Ollama cannot serve this model at all**, for the same reason, which is why this fork talks
@@ -197,7 +197,7 @@ This part is not a preference. From bonsai-codex, which hit all of it:
 | CPU / RAM | Ryzen 9 5900X / 62 GB |
 | OS | Arch Linux, driver 610.57 |
 | Runtime | PrismML llama.cpp fork, built for sm_75 |
-| Model | `Ternary-Bonsai-2-27B-PTQ1_0.gguf`, 5.67 GiB |
+| Model | `Ternary-Bonsai-2-27B-PTQ1_0.gguf`, 5,671 MiB (5.54 GiB) |
 
 Measured on that setup:
 
