@@ -26,7 +26,9 @@ Context rules, because this window holds very little:
 - Send only the lines that change. An `edit` whose `newText` is the whole file costs a minute of
   generation to change three lines; put the smallest unambiguous old/new pair in the call, and
   several small edits in the `edits` array instead of one rewrite.
-- Do not write files nothing asked for.
+- Never write code, a file's contents, or a diff into your reply. It has to be written again
+  inside the tool call, and this machine generates about eighteen tokens a second — a reply with
+  a file in it costs several minutes and changes nothing on disk. The tool call is the work.
 
 Long command output is already capped: it is truncated for you and saved in full to a temp file
 whose path you are told. Do not pipe through `head` or `tail` to shorten it yourself — the exit
@@ -48,7 +50,3 @@ arguments look like, for edit:
 
   path:  api.py
   edits: [{"oldText": "def create_app():\n    pass", "newText": "def create_app():\n    return app"}]
-
-and for bash:
-
-  command: python3 -m unittest discover -s tests -v

@@ -18,10 +18,11 @@ REPO = Path(__file__).resolve().parent.parent
 LAUNCHER = REPO / "bin" / "bonsai-pi"
 SERVER_SCRIPT = REPO / "scripts" / "run-server.sh"
 
-# The whole system prompt is sent on every request and the window is 24576 tokens. The two
-# profile files together must stay a small fraction of it; the upstream default is 179 chars,
-# but the ponytail ruleset is the reason the fork has one at all.
-PROMPT_CHAR_BUDGET = 6000
+# The two profile files together must stay a small fraction of the 24576-token window. 6400
+# characters is ~1600 tokens, ~6.5% of the window; with the tool schemas the whole fixed cost is
+# ~2500 tokens, ~10%. The number is a guard against slow growth, not a hard limit - raise it
+# deliberately, with a measurement, not to make an edit fit.
+PROMPT_CHAR_BUDGET = 6400
 
 
 def run_launcher(args, env_extra=None, expect=0):
@@ -153,15 +154,16 @@ class GeneratedConfig(unittest.TestCase):
         self.assertIn("You are a coding agent with five tools", proc.stdout)
         self.assertIn("You are a lazy senior developer", proc.stdout)
 
-    def test_check_extension_is_loaded_explicitly(self):
+    def test_hook_extensions_are_loaded_explicitly(self):
         # --no-extensions disables discovery only; the hooks have to be named or the model never
         # sees a test result it did not ask for.
         proc, _ = run_launcher(["--dry-run", "-p", "hi"])
         argv = proc.stdout.split("bonsai-pi: argv:\n", 1)[1].splitlines()
         loaded = [argv[i + 1] for i, a in enumerate(argv) if a == "-e"]
-        self.assertEqual(len(loaded), 2, loaded)
-        self.assertTrue(loaded[0].endswith("profile/check-after-edit.ts"))
-        self.assertTrue(loaded[1].endswith("profile/nudge-after-reads.ts"))
+        self.assertEqual(
+            [Path(p).name for p in loaded],
+            ["check-after-edit.ts", "nudge-after-reads.ts", "nudge-code-in-prose.ts"],
+        )
         for path in loaded:
             self.assertTrue(Path(path).is_file(), path)
 

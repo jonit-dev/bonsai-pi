@@ -31,8 +31,10 @@ PORT="${BONSAI_PORT:-8090}"
 CONTEXT="${BONSAI_CONTEXT:-24576}"
 MODEL="${BONSAI_MODEL:-$HOME/projects/bonsai2-cuda/models/Ternary-Bonsai-2-27B-PTQ1_0.gguf}"
 MODEL_ID="${BONSAI_MODEL_ID:-bonsai}"
-# Tokens the model may spend inside its thinking channel before the server closes it. Measured:
-# 1024 costs ~35 s of thinking per exploration turn, 512 ~15 s, on the same task. See BONSAI.md.
+# Tokens the model may spend inside its thinking channel before the server closes it. Note: a
+# 1024 -> 512 A/B on the same task did NOT demonstrate a speedup - the exploration turns that
+# differ are 8-31 s in both arms, too short to contain either budget. What actually dominates is
+# output size; see BONSAI.md. Left as a flag because it is cheap to test on other hardware.
 REASONING="${BONSAI_REASONING_BUDGET:-1024}"
 MIN_NODE="22.19.0"
 CLI="$HERE/packages/coding-agent/dist/bundle/cli.js"
@@ -282,14 +284,16 @@ prompt="$(cat "${HERE}/profile/bonsai.md")"$'\n\n'"$(cat "${HERE}/profile/ponyta
 # --tools read,bash,edit,write if a task measures worse with it.
 #
 # The extensions are loaded explicitly because --no-extensions disables discovery only (pi's own
-# help says so). Both cost no prompt tokens: the check hook does nothing without
-# BONSAI_CHECK_COMMAND, the nudge nothing without BONSAI_NUDGE_AFTER.
+# help says so). All three cost no prompt tokens: the check hook does nothing without
+# BONSAI_CHECK_COMMAND, the read nudge nothing without BONSAI_NUDGE_AFTER, the prose nudge
+# nothing without BONSAI_NUDGE_PROSE_CHARS.
 pi_flags=(
   --provider bonsai
   --model "${MODEL_ID}"
   --tools read,grep,bash,edit,write
   -e "${HERE}/profile/check-after-edit.ts"
   -e "${HERE}/profile/nudge-after-reads.ts"
+  -e "${HERE}/profile/nudge-code-in-prose.ts"
   --system-prompt "${prompt}"
   --no-skills
   --no-extensions

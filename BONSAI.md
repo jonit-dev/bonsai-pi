@@ -148,6 +148,48 @@ Additions were considered and rejected, or deferred until something measures the
 | **`@ast-grep/cli`** — structural search | Deferred. Ordinary `grep` has to be measured as a bottleneck first. |
 | **Duplicate-read suppression** ("unchanged since your last read") | Deferred, and the obvious version is unsafe: a file being unchanged does not mean the model still has its contents after a compaction. Any suppression has to key on the exact version *and* range *and* whether that text is still in context. |
 | **`pipefail` in the shell** | Not set. It would turn every ordinary `cmd | head` into a failure and change the meaning of pipelines the model already writes; the prompt no longer asks it to build them, which was the actual defect. |
+| **`@arcanemachine/pi-supercompact`** — deliberate, loss-resistant compaction with a preparation turn and a canonical handoff | **Measured, zero cost, not adopted.** Loaded with `-e npm:@arcanemachine/pi-supercompact` and captured the request: the system prompt and tool schemas are byte-identical to the baseline (6,029 / 4,398 chars, the same five tools) — our `--tools` allowlist filters its two schemas out entirely. That cuts both ways: with its tool filtered the model cannot request supercompaction, only the manual commands survive, and what the extension adds is *more model calls* (a preparation turn, a canonical summary turn) to solve context loss this setup has not experienced. |
+| **`@hicaru/pi-rlm`** — Recursive Language Model: a Python REPL that decomposes work across a smart root model and cheap worker models | **Not adopted; the premise does not fit.** Its whole design is a *fleet* — "your best model orchestrates, cheap workers do the leaf reads", benchmarked on long documents (PDF/EPUB/XLSX, OOLONG, cost per task in dollars). This setup is one 27B on one 8 GB card: every worker call is another 16–20 t/s generation on the same GPU, so delegation multiplies the thing that already dominates. It also ships a spawned Python process, provider keys, 957 KB, and its own prompt architecture. |
+| **`@sting8k/pi-vcc`** — algorithmic compaction, no LLM call, 30–470 ms claimed | **The one candidate with a measured case behind it, deferred.** Not for the reason usually given: it registers a `vcc_recall` tool (~100–300 tokens/request, versus the 2–5 tokens a survey guessed), and the case rests on real numbers — see the compaction cost below. The honest arithmetic is against it, though: 9 compactions occurred across **13 sessions**, so a session sees ~0.7 of them, ~30–160 s saved, paid for on every request in every session with a tool schema that itself fills the window slightly faster. Revisit if compaction ever dominates a run. |
+| **`pi-poke`** — recovers a work turn that dies after compaction | **Not adopted, no evidence it would fire.** It targets a real failure mode for this stack ("the run dies with `Error: This operation was aborted` right after `[compaction]`"), but across 13 sessions and 9 compactions **every compaction was followed by more work** — 9/9 resumed. Add it the day a run actually stalls on one. |
+
+## What compaction actually costs
+
+Worth knowing before adopting anything that promises to improve it. Parsed from the session
+JSONL of the runs recorded here:
+
+| | |
+|---|---|
+| compactions | **9**, across 13 sessions (7 sessions had at least one) |
+| compactions that stalled the run | **0** — every one was followed by more work |
+| gap from the compaction entry to the next message | **44–232 s** |
+
+That gap is pi calling the model to write the summary — a full extra generation at 16–20 t/s,
+in the middle of the task, and it cannot be prompt-tuned away. It is the one place where this
+harness spends minutes on something other than the model's own output. So compaction tooling is
+not a silly thing to look at; it is just that a session here sees ~0.7 of them, which is why
+`@sting8k/pi-vcc` is filed as "revisit" rather than "adopt".
+
+The same measurement says something about `--reasoning-budget`, which was the point of the A/B
+below: compaction, not thinking, is where the unattributed minutes go.
+
+`--reasoning-budget` was A/B'd on one task (the same spec over `entity-snapshot`, same check
+hook, same prompt, one variable):
+
+| | turns | time to a passing spec | outcome |
+|---|--:|--:|---|
+| `1024` | 14 | ~744 s | passing spec, 15 tests |
+| `512` | 11 | **641 s** | passing spec, 13 tests |
+
+Both green; the 512 arm finished 14% sooner with three fewer turns, and the two runs produced
+*different* test files, so that is one sample against one sample on a stochastic model — it is
+evidence that 512 does not hurt, not that it helps. The reason to distrust the speedup as a
+cause is in the turn gaps: the expensive turns are 239 s and 216 s of *generation*, far longer
+than either budget could account for, so what actually differs is how many turns the model
+spent, not how long it thought.
+
+The knob is worth exposing anyway (`--reasoning N`), because it is the cheapest thing to test
+on other hardware, and a smaller budget cannot make a turn slower.
 
 The rule for the next change: one at a time, on a task where the model has to find things, and
 the number to watch is **wall time per correctly completed task** — a smaller prompt that buys
