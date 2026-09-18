@@ -275,9 +275,25 @@ write, bash again — 98 seconds wall clock, peak window 2,061 tokens on the fir
 same fixture took 552 s and 9.6k tokens through Codex on the same model, and the bonsai-codex
 README records it as the fixture that failed for a long time before the fixes landed.
 
+On a real monorepo it does the *harness* half well. Pointed at `threenative-engine` (a large
+TypeScript workspace, in a git worktree so the main checkout is untouched) and asked for a spec
+over `packages/core/src/pose-measure.ts`, it: found the module and the spec conventions, grepped
+for the callers that had to keep working, wrote a 121-line test file, ran
+`npx vitest run <file>`, read the failures, diagnosed them in the source — "the axes are rows of
+the rotation matrix, not columns", "`posedBounds` is a cheap envelope: X/Z come from the bounding
+sphere" — and iterated. Every part of that is the harness working: five tools, a 9,931-char fixed
+prompt, and a context budget that never came close to the window.
+
+The part it does badly is **arithmetic**. Repeatedly, on this task, it produced an expected value
+it had reasoned out rather than derived: an axis sign flipped, `expected 7, got 6.258`. Three runs
+failed the same way. Two prompt rules aimed at it did not hold — first "do not hand-compute", then
+"run a snippet to get the number", which sent it twelve turns deep into where `three` resolves in
+a pnpm workspace. The rule now points at the only place the project's imports are known to work:
+compute the expectation inside the test, from the same library.
+
 Expect it to be a **single-file worker**, not a driver. Worked examples in the prompt are what
-make it produce usable calls; prose rules get ignored. It is at its worst on reconnaissance —
-ask for one file, not a survey.
+make it produce usable calls; a rule that stays prose is a rule it violates. Reads that it can
+justify are cheap; reads it cannot are where a run dies. Ask for one file, not a survey.
 
 ## Updating from upstream
 
