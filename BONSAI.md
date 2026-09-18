@@ -304,11 +304,40 @@ sphere" — and iterated. Every part of that is the harness working: five tools,
 prompt, and a context budget that never came close to the window.
 
 The part it does badly is **arithmetic**. Repeatedly, on this task, it produced an expected value
-it had reasoned out rather than derived: an axis sign flipped, `expected 7, got 6.258`. Three runs
-failed the same way. Two prompt rules aimed at it did not hold — first "do not hand-compute", then
-"run a snippet to get the number", which sent it twelve turns deep into where `three` resolves in
-a pnpm workspace. The rule now points at the only place the project's imports are known to work:
-compute the expectation inside the test, from the same library.
+it had reasoned out rather than derived: an axis sign flipped, `expected 7, got 6.258`,
+`expected 10, got 4.59`. Five runs failed the same way, and two prompt rules aimed at it did not
+hold — first "do not hand-compute", then "run a snippet to get the number", which sent it twelve
+turns deep into where `three` resolves in a pnpm workspace. The rule now points at the only place
+the project's imports are known to work: compute the expectation inside the test, from the same
+library. That changed the approach — the next attempt was deriving bounds with `Box3` and
+asserting containment rather than asserting constants — but not the outcome on this module.
+
+The check hook (below) was built for exactly this failure and does repair the *loop*: with
+`BONSAI_CHECK_COMMAND` set, every write comes back carrying the test result, so the model never
+gets to skip the run. On `pose-measure` that still did not converge — 3 of 5 failing after eleven
+minutes — which is the honest reading of where the boundary is: the harness can guarantee the
+model **sees** the failure, it cannot make it produce a correct expectation for a transform.
+
+**Acceptance, with the hook on.** The same harness, the same repo, a module whose expectations are
+structural rather than numeric (`packages/core/src/entity-snapshot.ts`): `BONSAI_CHECK_COMMAND='npx
+vitest run packages/core/__tests__/entity-snapshot.spec.ts' bin/bonsai-pi -p "add a unit test file
+for the entity snapshot helpers..."` produced a 15-test spec that **passes, 15/15**, verified by
+running the file independently. The transcript shows the loop doing the work:
+
+| | |
+|---|---|
+| `write` → check | `exited 1` — a parse error, delivered inside the write's own result |
+| `write` → check | `exited 1` — 13 of 15 passing |
+| `edit` → check | `exited 1` — 14 of 15; "Both failures are on my end, not the implementation's fault" |
+| `edit` → check | **`exited 0`** — then, unprompted, it ran the whole `packages/core` suite |
+
+Fourteen assistant turns. On the transform module the same setup could not get there; on this one
+it did, and it diagnosed two of its own bugs from output it never asked for. That is the whole
+argument for the hook over a prompt rule.
+
+The spec is merged to `threenative` `develop` as `2bc80533e` — tests only, one file, 182 lines,
+verified by running the file on that branch — from a worktree, with the main checkout (which had
+its own work in progress) never touched.
 
 Expect it to be a **single-file worker**, not a driver. Worked examples in the prompt are what
 make it produce usable calls; a rule that stays prose is a rule it violates. Reads that it can
