@@ -104,7 +104,7 @@ class ProfileBudget(unittest.TestCase):
 
 class GeneratedConfig(unittest.TestCase):
     def test_context_window_and_compaction_follow_the_window(self):
-        for ctx in (24576, 16384, 12288):
+        for ctx in (24576, 16384, 12288, 8192):
             with self.subTest(ctx=ctx):
                 proc, state = run_launcher(["--dry-run", "--ctx", str(ctx), "-p", "hi"])
                 home = state / "bonsai-pi" / "pi-home"
@@ -119,27 +119,38 @@ class GeneratedConfig(unittest.TestCase):
                 settings = json.loads((home / "settings.json").read_text())
                 reserve = settings["compaction"]["reserveTokens"]
                 recent = settings["compaction"]["keepRecentTokens"]
-                self.assertEqual(reserve, ctx // 3)
-                self.assertEqual(recent, ctx // 8)
-                # Compaction fires at ctx - reserve and keeps `recent` verbatim; if recent were
-                # the larger of the two it would re-trigger on the very next turn.
-                self.assertLess(recent, reserve)
-                # A prompt at the trigger must still leave room for a whole file plus pi's own
-                # 4096-token safety margin, or max_completion_tokens clamps to nothing.
-                self.assertGreater(ctx - reserve - 4096, 1024)
+
+                # pi subtracts its own CONTEXT_SAFETY_TOKENS from whatever is left, so the room
+                # the model actually gets at the compaction trigger is `reserve - 4096`. That,
+                # not `ctx - reserve - 4096`, is the number that has to be usable. The old
+                # invariant passed at 12288 while the real answer allowance was one token.
+                answer = model["maxTokens"]
+                self.assertEqual(reserve, answer + 4096)
+                self.assertGreaterEqual(reserve - 4096, 1024, "answer room at the trigger")
+                self.assertGreaterEqual(answer, 1024)
+                # keepRecent is what survives a compaction verbatim; if it reached the trigger
+                # the next turn would compact again immediately.
+                self.assertLessEqual(recent, (ctx - reserve) // 2)
+                self.assertLess(recent, ctx - reserve)
+                self.assertGreaterEqual(ctx - reserve, 2048)
+
+    def test_rejects_a_window_that_cannot_hold_a_prompt_and_an_answer(self):
+        proc, _ = run_launcher(["--dry-run", "--ctx", "4096", "-p", "hi"], expect=1)
+        self.assertIn("a 4096-token window leaves", proc.stderr)
+        self.assertIn("--ctx 8192", proc.stderr)
 
     def test_command_line_restricts_tools_and_discovery(self):
         proc, _ = run_launcher(["--dry-run", "-p", "hi"])
         argv = proc.stdout.split("bonsai-pi: argv:\n", 1)[1].splitlines()
-        # --tools takes one comma-separated argument, not four.
-        self.assertIn("read,bash,edit,write", argv)
-        self.assertEqual(argv[argv.index("--tools") + 1], "read,bash,edit,write")
+        # --tools takes one comma-separated argument, not five.
+        self.assertIn("read,grep,bash,edit,write", argv)
+        self.assertEqual(argv[argv.index("--tools") + 1], "read,grep,bash,edit,write")
         self.assertEqual(argv[argv.index("--provider") + 1], "bonsai")
         self.assertEqual(argv[argv.index("--model") + 1], "bonsai")
         for flag in ("--no-skills", "--no-extensions", "--no-prompt-templates", "--no-themes", "--no-context-files"):
             self.assertIn(flag, argv)
         # The system prompt goes through as one multi-line argument: both halves must be there.
-        self.assertIn("You are a coding agent with four tools", proc.stdout)
+        self.assertIn("You are a coding agent with five tools", proc.stdout)
         self.assertIn("You are a lazy senior developer", proc.stdout)
 
     def test_context_files_are_opt_in(self):

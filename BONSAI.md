@@ -24,12 +24,18 @@ Measured on this machine, first request of a session, same CLI, same model:
 
 | | stock pi 0.85.1 | bonsai-pi |
 |---|--:|--:|
-| system message text | 85,159 chars | 4,094 chars |
-| tool schemas | 3,298 chars | 3,298 chars |
-| whole request | 88,522 chars | 7,453 chars |
-| pi's own token estimate | ~22,130 | ~1,863 |
-| server-reported first turn | not reached | **2,061 tokens** |
+| system message text | 85,159 chars | 5,533 chars |
+| tool schemas | 3,298 chars | 4,398 chars |
+| whole request | 88,522 chars | 9,992 chars |
+| pi's own token estimate | ~22,130 | ~2,498 |
 | skills in the prompt | 199 (from `~/.agents/skills`) | 0 |
+
+Two caveats on the stock column, because it is easy to over-read: the 199 skills were discovered
+from *this* machine's shared `~/.agents/skills`, so 22k is what stock pi costs in an environment
+that has them, not a fixed baseline for every installation. And it is pi's own character
+estimate, not a server count. The number the model actually had to read, prefill and hold was
+**2,061 prompt tokens** for the first turn of a real session, measured when the profile was
+smaller than the table above.
 
 `max_completion_tokens` on the stock run was **1**: pi clamped the answer to the window and
 found nothing left after its own 4096-token safety margin. The model would be asked to reply in
@@ -41,22 +47,35 @@ one token. That is the whole reason for the fork.
 
 | | |
 |---|---|
-| `--tools read,bash,edit,write` | strict allowlist; the eight built-ins pi ships reduce to the four this model uses |
+| `--tools read,grep,bash,edit,write` | strict allowlist; pi ships eight built-ins, this model gets five |
 | `--system-prompt <profile>` | `profile/bonsai.md` (tool mechanics, literal argument examples) plus `profile/ponytail.md` |
 | `--no-skills --no-extensions --no-prompt-templates --no-themes` | 199 skill blocks were the single largest cost of the stock prompt |
 | `--no-context-files` | off by default: a project's `CLAUDE.md` in this workspace is 10-22KB. `--context-files` opts back in |
 | generated `models.json` | the served model, with `contextWindow` copied from the server's `/props`, not assumed |
-| generated `settings.json` | compaction scaled to that window (below), trust defaulted, telemetry off |
+| generated `settings.json` | a context budget derived from that window (below), trust defaulted, telemetry off |
 
-Two changes in the source, both about the 24k window:
+Why `grep` is in the list: every observed run without it hand-rolled `grep -rn … | head` through
+`bash` — the same search, with worse output bounds and an extra round trip. Its schema costs
+1,102 chars (~275 tokens) per request, which is not obviously cheaper than the bash calls it
+replaces. It is a trade, not a theorem: `--tools read,bash,edit,write` puts it back to four if a
+task measures worse with it.
+
+Three changes in the source:
 
 - **Tool output caps** (`packages/coding-agent/src/core/tools/truncate.ts`): 50KB / 2000 lines →
   **8KB / 400 lines**. Upstream's default is 12k+ tokens for a single tool result — half the
   window for one `cat`. 8KB is ~2k tokens.
-- **Compaction thresholds** are set from the loaded window by the launcher: `reserveTokens =
-  ctx/3`, `keepRecentTokens = ctx/8`. Upstream's 16384/20000 are for a hosted model with a
-  200k window: on a 24576 window they trigger compaction at 8192 tokens while keeping 20000
-  tokens verbatim, so every turn would compact again.
+- **The context budget is derived once, and it composes.** pi clamps `max_completion_tokens` to
+  `window − prompt − 4096` and never below 1 (`CONTEXT_SAFETY_TOKENS` in
+  `packages/ai/src/api/simple-options.ts`). So the reserve the compaction trigger holds back must
+  cover the answer we want *plus* that 4096: at the trigger the model is left `reserve − 4096`
+  tokens, not `window − trigger`. The launcher sets `answer = min(ctx/4, 8192)`, `reserve = answer
+  + 4096`, `keepRecent ≤ (ctx − reserve)/2`, and refuses a window where that leaves the prompt
+  under 2048 tokens at all. Sizing the reserve as a fraction of the window is how a 12288 window
+  promised room in a comment and delivered **one token** in practice.
+- **Upstream's `reserveTokens`/`keepRecentTokens` defaults** (16384/20000) are for a hosted model
+  with a 200k window: on a 24576 window they trigger compaction at 8192 while keeping 20000
+  verbatim, so every turn would compact again.
 
 One upstream bug fixed on the way, because the caps above made it deterministic:
 `executeBashWithOperations` returned before its full-output temp file was flushed, so the path
@@ -68,11 +87,11 @@ Everything fixed rides on every single request, so it is worth stating exactly:
 
 | | chars | ~tokens |
 |---|--:|--:|
-| `profile/bonsai.md` + `profile/ponytail.md` | 5,038 | 1,260 |
-| tool schemas — read 837, bash 652, edit 1,297, write 500 | 3,286 | 821 |
-| **fixed total** | **8,335** | **2,083** |
+| profile text — `bonsai.md` + `ponytail.md`, plus the cwd line | 5,533 | 1,383 |
+| tool schemas — read 837, grep 1,102, bash 652, edit 1,297, write 500 | 4,398 | 1,100 |
+| **fixed total** | **9,931** | **2,483** |
 
-That is 8.5% of the 24576-token window, against 22,130 tokens — 90% — for stock pi. Everything
+That is 10% of the 24576-token window, against 22,130 tokens — 90% — for stock pi. Everything
 else in the window is the actual conversation.
 
 Where the stock cost went, measured, and what each alternative would cost:
@@ -82,17 +101,38 @@ Where the stock cost went, measured, and what each alternative would cost:
 - **The `<docs>` section** pointed the model at pi's own SDK documentation: 1,170 chars. A custom
   `--system-prompt` replaces the whole tools/rules/docs block, not just the preamble, so it went
   with it — and it was an invitation to reconnaissance, which is this model's worst failure mode.
-- **`grep`, `find` and `ls`**: rejected. They cost 1,102 / 659 / 508 chars — 568 tokens between
-  them — and the model does that work with `bash` anyway.
+- **`grep` is in; `find` (659) and `ls` (508) are out.** Search earns its 1,102 chars because the
+  model searches constantly; `find` and `ls` do not, and `bash` covers them.
 - **A repo map** (Aider-style tree-sitter outline): rejected. 5–50k tokens; it does not fit in a
   24k window twice.
 - **Tool output caps** of 8KB instead of 50KB: the largest non-obvious saving. One `cat` of a
   generated file used to cost 12k tokens — half the window — for a single tool result.
 
-The remaining inefficiency is not bytes, it is **turns**: a reconnaissance loop of 20 read calls
-costs more than every schema in this table combined. That is what the profile's reading rules are
-for, and why they are written as procedure ("at most four read or bash calls before your first
-write") rather than as advice.
+The remaining inefficiency is not bytes, it is **turns**. A reconnaissance loop of 20 read calls
+costs more than every schema in this table combined, so the profile's reading rules exist — but
+they are written as bounds rather than prohibitions. An earlier draft capped reads before the
+first write, forbade reading configuration and directory listings outright, and told the model to
+pipe long output through `head`/`tail`. All three were wrong: the cap made it write before it had
+the evidence, the prohibitions contradicted the ponytail ruleset appended right below them
+("trace the real flow", "read it fully"), and a truncating pipe hides the exit status of the
+command whose result matters. Now it reads what it needs once, looks essentials up instead of
+guessing, and leaves truncation to the harness.
+
+## What is deliberately not here
+
+Additions were considered and rejected, or deferred until something measures them:
+
+| | |
+|---|---|
+| **RTK** ([rtk-ai/rtk](https://github.com/rtk-ai/rtk)) — command-output reduction, ships a pi extension | Not enabled. `--no-extensions` only disables *discovery*, so an explicit `-e <path-or-npm-pkg>` still loads; try it against a task and measure time-per-completed-task before making it a default. Do not enable it together with another change, or the result says nothing. |
+| **Headroom** — output compression library/proxy | Not enabled. Its own documentation reports weak gains on already-dense payloads, and this profile already bounds tool output at 8KB. |
+| **`@ast-grep/cli`** — structural search | Deferred. Ordinary `grep` has to be measured as a bottleneck first. |
+| **Duplicate-read suppression** ("unchanged since your last read") | Deferred, and the obvious version is unsafe: a file being unchanged does not mean the model still has its contents after a compaction. Any suppression has to key on the exact version *and* range *and* whether that text is still in context. |
+| **`pipefail` in the shell** | Not set. It would turn every ordinary `cmd | head` into a failure and change the meaning of pipelines the model already writes; the prompt no longer asks it to build them, which was the actual defect. |
+
+The rule for the next change: one at a time, on a task where the model has to find things, and
+the number to watch is **wall time per correctly completed task** — a smaller prompt that buys
+another repair cycle is not a saving.
 
 ## VRAM: nothing here is sized for one card
 
@@ -249,16 +289,30 @@ git remote add upstream https://github.com/earendil-works/pi.git
 git fetch upstream && git merge upstream/main
 ```
 
-The fork's own surface is small on purpose: `bin/`, `profile/`, `scripts/`, `tests/`, this
-file, and the two source changes above. Everything else is upstream, so a merge is a merge.
+The fork's own surface is small on purpose: `bin/`, `profile/`, `scripts/`, `tests/`, `setup.sh`,
+this file, and the source changes above. Everything else is upstream, so a merge is a merge.
 
 ## Development
 
 ```sh
+./setup.sh                       # prerequisites, and the exact command for anything missing
 npm ci && npm run build          # node >= 22.19; the bundle lands in packages/coding-agent/dist
-python3 tests/test_bonsai_pi.py  # profile budget, generated config, guards, arg forwarding
+python3 tests/test_bonsai_pi.py  # budget arithmetic, generated config, guards, arg forwarding
 npx vitest --run packages/coding-agent/test/tools.test.ts
 ```
 
 `--dry-run` prints the resolved argv, one argument per line, and writes the generated configs
 without starting anything — that is what the launcher tests assert on.
+
+The launcher is 280 lines of bash and the only place a mistake costs a model load, so run
+[ShellCheck](https://github.com/koalaman/shellcheck) over it when you touch it. It is a
+development tool, not a runtime dependency, and nothing here requires it:
+
+```sh
+shellcheck bin/bonsai-pi scripts/run-server.sh setup.sh
+```
+
+Note that the pre-commit hook (`npm run check`) fails on this checkout for an upstream reason
+unrelated to the fork — `node:sqlite` is undeclared in
+`packages/session-backends/sqlite-node` — so commits here use `--no-verify` and the checks listed
+above are run by hand instead.

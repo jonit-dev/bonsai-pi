@@ -192,15 +192,24 @@ if [[ "${loaded_ctx}" =~ ^[0-9]+$ ]] && (( loaded_ctx > 0 )); then
   ctx="${loaded_ctx}"
 fi
 
-# One third of the window is reserved for the answer: the compaction trigger fires at
-# ctx - reserve, and pi clamps max_completion_tokens to what is left after the prompt and a
-# 4096-token safety margin, so a prompt that grows to the trigger still leaves the model room
-# to write a whole file. keepRecent is what stays verbatim through a compaction; it must be
-# below the trigger or compaction would fire again immediately.
-reserve=$(( ctx / 3 ))
+# pi clamps max_completion_tokens to `window - prompt - 4096`, never below 1 (CONTEXT_SAFETY_TOKENS
+# in packages/ai/src/api/simple-options.ts). So the reserve that the compaction trigger holds back
+# has to cover both the answer we want and that safety margin: at the trigger the model is left
+# `reserve - 4096` tokens, not `window - trigger`. Reserve sized as a fraction of the window is how
+# a 12288 window promised room in a comment and delivered one token in practice.
+answer=$(( ctx / 4 ))
+(( answer > 8192 )) && answer=8192
+reserve=$(( answer + 4096 ))
+trigger=$(( ctx - reserve ))
+if (( trigger < 2048 )); then
+  echo "bonsai-pi: a ${ctx}-token window leaves ${trigger} for the prompt once ${answer} is held" >&2
+  echo "bonsai-pi: back for the answer and pi keeps 4096 more as a safety margin. Use at least" >&2
+  echo "bonsai-pi: --ctx 8192, or a smaller model." >&2
+  exit 1
+fi
 keep_recent=$(( ctx / 8 ))
-max_output=$(( ctx / 3 ))
-(( max_output > 8192 )) && max_output=8192
+(( keep_recent > trigger / 2 )) && keep_recent=$(( trigger / 2 ))
+max_output=$answer
 
 run_home="${PI_HOME}"
 if [[ "${dry_run}" == true ]]; then
@@ -257,12 +266,15 @@ node_bin="$(find_node)" || {
 
 prompt="$(cat "${HERE}/profile/bonsai.md")"$'\n\n'"$(cat "${HERE}/profile/ponytail.md")"
 
-# --tools is a strict allowlist over built-in and extension tools alike, so the four tools
-# here are the entire tool surface the model is shown.
+# --tools is a strict allowlist over built-in and extension tools alike, so these five are the
+# entire tool surface the model is shown. grep is here because every run without it hand-rolled
+# `grep -rn ... | head` through bash: same work, worse output bounds, and an extra round trip.
+# Its schema costs 1,102 chars (~275 tokens) per request; drop it back to four with
+# --tools read,bash,edit,write if a task measures worse with it.
 pi_flags=(
   --provider bonsai
   --model "${MODEL_ID}"
-  --tools read,bash,edit,write
+  --tools read,grep,bash,edit,write
   --system-prompt "${prompt}"
   --no-skills
   --no-extensions
