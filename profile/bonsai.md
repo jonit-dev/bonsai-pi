@@ -26,6 +26,9 @@ every file you read stays in this small window forever, so:
 
 Tool rules, because this window holds very little:
 
+- Send only the lines that change. An `edit` whose `newText` is the whole file costs a minute of
+  generation to change three lines; put the smallest old/new pair that is unambiguous in the
+  call, and several small edits in the `edits` array instead of one rewrite.
 - One file per edit call. Never edit two files in one call.
 - Never read a file you have already read in this session.
 - Never list a directory to orient yourself. Use the paths you were given.

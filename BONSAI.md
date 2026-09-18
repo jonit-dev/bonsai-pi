@@ -62,6 +62,38 @@ One upstream bug fixed on the way, because the caps above made it deterministic:
 `executeBashWithOperations` returned before its full-output temp file was flushed, so the path
 it hands the model could read back **empty**. It now awaits the write.
 
+## The budget, per request
+
+Everything fixed rides on every single request, so it is worth stating exactly:
+
+| | chars | ~tokens |
+|---|--:|--:|
+| `profile/bonsai.md` + `profile/ponytail.md` | 5,038 | 1,260 |
+| tool schemas — read 837, bash 652, edit 1,297, write 500 | 3,286 | 821 |
+| **fixed total** | **8,335** | **2,083** |
+
+That is 8.5% of the 24576-token window, against 22,130 tokens — 90% — for stock pi. Everything
+else in the window is the actual conversation.
+
+Where the stock cost went, measured, and what each alternative would cost:
+
+- **The `<skills>` section was ~82k of the 85k system-message characters**, 199 entries discovered
+  from `~/.agents/skills`. Removed; a local model is not going to browse a skill index.
+- **The `<docs>` section** pointed the model at pi's own SDK documentation: 1,170 chars. A custom
+  `--system-prompt` replaces the whole tools/rules/docs block, not just the preamble, so it went
+  with it — and it was an invitation to reconnaissance, which is this model's worst failure mode.
+- **`grep`, `find` and `ls`**: rejected. They cost 1,102 / 659 / 508 chars — 568 tokens between
+  them — and the model does that work with `bash` anyway.
+- **A repo map** (Aider-style tree-sitter outline): rejected. 5–50k tokens; it does not fit in a
+  24k window twice.
+- **Tool output caps** of 8KB instead of 50KB: the largest non-obvious saving. One `cat` of a
+  generated file used to cost 12k tokens — half the window — for a single tool result.
+
+The remaining inefficiency is not bytes, it is **turns**: a reconnaissance loop of 20 read calls
+costs more than every schema in this table combined. That is what the profile's reading rules are
+for, and why they are written as procedure ("at most four read or bash calls before your first
+write") rather than as advice.
+
 ## VRAM: nothing here is sized for one card
 
 The launcher refuses to start a server it does not believe the card can hold, and it works that
