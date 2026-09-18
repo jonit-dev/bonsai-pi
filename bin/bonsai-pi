@@ -294,6 +294,7 @@ pi_flags=(
   -e "${HERE}/profile/check-after-edit.ts"
   -e "${HERE}/profile/nudge-after-reads.ts"
   -e "${HERE}/profile/nudge-code-in-prose.ts"
+  -e "${HERE}/profile/block-rewrite.ts"
   --system-prompt "${prompt}"
   --no-skills
   --no-extensions

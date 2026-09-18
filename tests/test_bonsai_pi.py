@@ -162,7 +162,12 @@ class GeneratedConfig(unittest.TestCase):
         loaded = [argv[i + 1] for i, a in enumerate(argv) if a == "-e"]
         self.assertEqual(
             [Path(p).name for p in loaded],
-            ["check-after-edit.ts", "nudge-after-reads.ts", "nudge-code-in-prose.ts"],
+            [
+                "check-after-edit.ts",
+                "nudge-after-reads.ts",
+                "nudge-code-in-prose.ts",
+                "block-rewrite.ts",
+            ],
         )
         for path in loaded:
             self.assertTrue(Path(path).is_file(), path)
