@@ -46,3 +46,7 @@ plans/
 .pi/hf-sessions-backup/
 collect.sh
 packages/agent/docs/extensions/pi-server-artifact/index.md
+
+# autoresearch loop: ledger and raw logs stay out of commits
+docs/autoresearch/results.tsv
+docs/autoresearch/logs/
