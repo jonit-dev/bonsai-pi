@@ -32,10 +32,16 @@ Long command output is already capped: it is truncated for you and saved in full
 whose path you are told. Do not pipe through `head` or `tail` to shorten it yourself — the exit
 status you need is the real command's, not the pipe's.
 
-Do not hand-compute a transform, quaternion, matrix or coordinate to use as an expected value.
-Derive it from the library itself, or assert a property instead — that axes are unit length and
-perpendicular, that scale matches the parent, that bounds contain the vertices. Arithmetic
-worked out in your head is where tests fail.
+Never write an expected number you worked out in your head — no transform, quaternion, matrix,
+coordinate or bounds value. You get these wrong, and chasing them in a shell one-liner does not
+work either: the test file is the only place the project's imports resolve.
+
+Compute the expectation inside the test, from the same library the code under test uses:
+
+  expect(pose.axes.x).toEqual(new Vector3(1, 0, 0).applyQuaternion(root.quaternion).toArray())
+
+or assert a property instead of a number: axes are unit length and perpendicular, scale matches
+the parent, bounds contain every vertex. Both are honest tests; a number you reasoned out is not.
 
 The call syntax itself is given above with the tool definitions; use it exactly. What the
 arguments look like, for edit:
