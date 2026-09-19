@@ -122,8 +122,16 @@ not the parse error.
 1. **Raise n before ranking.** Ten runs per arm, not two. Until then nothing here is a rate.
 2. **Read nudge** (`BONSAI_NUDGE_AFTER=4`): 6 reader calls before the first write in every run so
    far, and the extension exists but has never been switched on.
-3. **`--reasoning 512`** against the 1024 default.
-4. **The output cap** keeps the head of the check output; vitest prints its summary before the
+3. **`--reasoning 512`** against the 1024 default. This is the likeliest lever on `wall_s`: at 22
+   turns and 1,256 s, trial 3 averaged ~57 s per turn, which matches a 1,024-token budget at the
+   ~15 t/s this card generates - the thinking is most of the wall clock, not the file.
+4. **Say what the check is, in the prompt.** Trials 3 and 4 each spent 2-3 turns discovering the
+   test setup - `ls vitest.config*`, `grep '"test"' package.json`, `find -name vitest.config*` -
+   and one went on to run a whole directory and investigate an unrelated failing spec. The
+   launcher already knows `BONSAI_CHECK_COMMAND`; the model is never told it, so it goes looking.
+   Not implemented: the batch below runs the current harness, and editing it mid-batch would
+   change the harness under the later trials in the same batch.
+5. **The output cap** keeps the head of the check output; vitest prints its summary before the
    failure detail. Measured at 3,126 characters against a 3,000 cap in trial 1, so it is live but
    not yet binding.
 
@@ -131,6 +139,7 @@ A fifth hypothesis was withdrawn. The first diagnostics reported the same bash c
 **fifteen times**, which motivated a repeat-breaking extension. The commands are 23 *distinct*
 calls that share a `cd <worktree> && ` prefix, and the metric keyed on a 60-character prefix. No
 true repeats exist in trial 1. The extension was reverted and the metric fixed.
+
 
 
 
