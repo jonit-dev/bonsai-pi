@@ -153,11 +153,13 @@ holds. That is not a reason to keep code the measurement did not support.
 
 ## Totals
 
-18 trials over roughly four hours of wall clock: 16 rows recorded, one trial lost to a server that
-would not start, one killed by hand. One change absorbed - a 33% median improvement, predicted
-before it was run. One change discarded. Two arms measured and not promoted (read nudge, reasoning
-512). One bad metric found and fixed, one fatal failure mode found and fixed, three setup defects
-found and fixed.
+18 trials were started and 14 rows were recorded. Missing: 7 and 17 (killed by hand, to stop a
+batch and to wrap up), 8 (the server would not start), 18 (never ran, because the batch was
+stopped).
+
+One change absorbed - a 33% median improvement, predicted before it was run. One change discarded.
+Two arms measured and not promoted (read nudge, reasoning 512). One bad metric found and fixed, one
+fatal failure mode found and fixed, three setup defects found and fixed.
 
 The floor this loop ran into is variance: identical code spans 290 s to 1,801 s on this task. Four
 runs per arm is enough to see a 33% effect twice and not enough to see a small one once. Any future
