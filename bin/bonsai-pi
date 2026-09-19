@@ -277,6 +277,22 @@ node_bin="$(find_node)" || {
 
 prompt="$(cat "${HERE}/profile/bonsai.md")"$'\n\n'"$(cat "${HERE}/profile/ponytail.md")"
 
+# Say what the check is, and that nobody has to run it.
+#
+# The hook runs it after every write and edit, but the model was told neither the command nor that
+# it happens, so every run paid to find out: 4 turns of `ls vitest.config*` / `grep '"test"'
+# package.json`, then 1-4 hand-run `vitest` invocations of its own - twice over the whole test
+# directory. Counting the turns that would not exist if it knew, they are 20-50% of wall time
+# across the runs measured, and the whole-directory runs are the two slowest turns in the ledger
+# (169 s and 305 s, on 8k-token inputs, because the output lands in the context and is re-read).
+#
+# Costs ~60 tokens per request; the turns it removes cost ~25 s each. BONSAI_ANNOUNCE_CHECK=0
+# drops the line so an arm can be run against it in the same batch - the evaluator always sets
+# BONSAI_CHECK_COMMAND, so without a gate there would be no control to compare against.
+if [[ -n "${BONSAI_CHECK_COMMAND:-}" && "${BONSAI_ANNOUNCE_CHECK:-1}" != "0" ]]; then
+  prompt="${prompt}"$'\n\n'"## The check"$'\n'"After every file you write or edit, this runs automatically: ${BONSAI_CHECK_COMMAND}"$'\n'"Its output is appended to that same tool result. Do not look for how the project runs its tests, and do not run it yourself - read the result you are given."
+fi
+
 # --tools is a strict allowlist over built-in and extension tools alike, so these five are the
 # entire tool surface the model is shown. grep is here because every run without it hand-rolled
 # `grep -rn ... | head` through bash: same work, worse output bounds, and an extra round trip.

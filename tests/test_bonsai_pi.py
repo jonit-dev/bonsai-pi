@@ -184,6 +184,39 @@ class GeneratedConfig(unittest.TestCase):
         self.assertEqual(argv[argv.index("-p") + 1], "do the thing")
 
 
+class CheckIsAnnounced(unittest.TestCase):
+    """The model is told what the check is, and that it runs by itself.
+
+    It was told neither. Every run paid to find out: 4 turns of `ls vitest.config*` and
+    `grep '"test"' package.json`, then 1-4 hand-run vitest invocations of its own - twice over the
+    whole test directory, which put 8k tokens in the context and cost 169 s and 305 s to re-read.
+    Counting the turns that would not exist if it knew, they are 20-50% of wall time.
+    """
+
+    def test_the_check_reaches_the_system_prompt(self):
+        proc, _ = run_launcher(
+            ["--dry-run", "-p", "hi"],
+            env_extra={"BONSAI_CHECK_COMMAND": "npx vitest run packages/core/x.spec.ts"},
+        )
+        self.assertIn("npx vitest run packages/core/x.spec.ts", proc.stdout)
+        self.assertIn("runs automatically", proc.stdout)
+        self.assertIn("do not run it yourself", proc.stdout)
+
+    def test_no_check_costs_no_prompt_tokens(self):
+        # Unset, the line must not exist at all: it is a prompt token on every request otherwise.
+        proc, _ = run_launcher(["--dry-run", "-p", "hi"], env_extra={"BONSAI_CHECK_COMMAND": ""})
+        self.assertNotIn("## The check", proc.stdout)
+
+    def test_the_line_can_be_switched_off_for_a_control_arm(self):
+        # The evaluator always sets BONSAI_CHECK_COMMAND, so without this gate there is no way to
+        # run the control in the same batch as the arm.
+        proc, _ = run_launcher(
+            ["--dry-run", "-p", "hi"],
+            env_extra={"BONSAI_CHECK_COMMAND": "npx vitest run x.spec.ts", "BONSAI_ANNOUNCE_CHECK": "0"},
+        )
+        self.assertNotIn("## The check", proc.stdout)
+
+
 class Guards(unittest.TestCase):
     def test_refuses_to_start_the_server_without_vram(self):
         proc, state = run_launcher(
