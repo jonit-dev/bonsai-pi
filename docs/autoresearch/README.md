@@ -171,11 +171,18 @@ dropping an arm once its prediction looks bad is how a loop starts fooling itsel
 ## Next, in order
 
 1. **Raise n before ranking.** Ten runs per arm, not two. Until then nothing here is a rate.
-2. **Tell the model what the check is, and that it runs by itself.** The launcher already knows
+2. **Advise on the *first* failure, not the second.** Trial 6 wrote the spec, failed the check,
+   and its next action was a 7,152-character rewrite. The hook refused the write - `blocked=1`,
+   the guard's first ever block - and the file was saved, but **the generation had already
+   happened**: 7,152 characters is ~1,788 output tokens, ~120 s at the measured 15 t/s. A
+   `tool_call` block cannot prevent that; only what the model reads before it generates can. The
+   advice that says "do not rewrite the file, fix only what the error names" is attached at the
+   *second* failure today, which is one failure too late to be read before the rewrite is written.
+3. **Tell the model what the check is, and that it runs by itself.** The launcher already knows
    `BONSAI_CHECK_COMMAND` and the hook already runs it after every write and edit, and the model
    is told neither. It spends 4 turns discovering the test setup, then runs vitest by hand 1-4
-   more times - twice over the whole directory. This is now the top lever, by a wide margin, and
-   it is one prompt line.
+   more times - twice over the whole directory. It is one prompt line, and the prediction below is
+   still the largest single number in this file.
 
    **Prediction, written before the trial.** Counting the turns that would not exist if the model
    knew the check, and adding up the time those turns actually took:
@@ -189,16 +196,20 @@ dropping an arm once its prediction looks bad is how a loop starts fooling itsel
    So 20-50% of `wall_s`, and the prediction is falsifiable: if the arm comes back inside the
    baseline spread, the turns were not the cost and the change is not worth keeping.
 
-3. **Read nudge** (`BONSAI_NUDGE_AFTER=4`): queued, and cheap. 6-9 reader calls before the first
-   write in every run, though the timing says those early turns cost only ~55 s together.
-4. **`--reasoning 512`**: queued, and expected flat on the arithmetic above. Worth running
+4. **Read nudge** (`BONSAI_NUDGE_AFTER=4`): measured in trial 6. It cut early reads from 8-9 to
+   6, setup turns from 4 to 2, and hand-run checks to zero - and the run failed anyway, because
+   those early turns cost only ~55 s together. Keep it for the turn reduction, not for a win.
+5. **Reading back its own file.** Trial 6 read `entity-snapshot.spec.ts` - the file it had just
+   written - **7 times**. The read nudge resets on a successful change, so those count as fresh
+   reads and are nudged only eventually. A read of a path this session wrote is never useful.
+6. **`--reasoning 512`**: queued, and expected flat on the arithmetic above. Worth one run
    precisely because it is expected to fail - a knob whose help text claims "512 measured faster"
    should not stay in the launcher on the strength of that claim alone.
-5. **The output cap** keeps the head of the check output; vitest prints its summary before the
+7. **The output cap** keeps the head of the check output; vitest prints its summary before the
    failure detail. Measured at 3,126 characters against a 3,000 cap in trial 1, so it is live but
    not yet binding.
 
-A fifth hypothesis was withdrawn. The first diagnostics reported the same bash command repeated
+A hypothesis was withdrawn. The first diagnostics reported the same bash command repeated
 **fifteen times**, which motivated a repeat-breaking extension. The commands are 23 *distinct*
 calls that share a `cd <worktree> && ` prefix, and the metric keyed on a 60-character prefix. No
 true repeats exist in trial 1. The extension was reverted and the metric fixed.
