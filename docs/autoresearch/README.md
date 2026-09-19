@@ -15,7 +15,7 @@ a fixed task, one change at a time, with the numbers written down — not to fee
 | **Budget** | One trial = one full run, timeout 1800 s. Server restart included (~60 s) and identical for every trial. |
 | **Mutable surface** | `profile/*.md`, `profile/*.ts`, `bin/bonsai-pi`, and — if a hypothesis demands it — a named source file under `packages/coding-agent/src/`, declared in the trial's `arm` string. |
 | **Immutable surface** | The evaluator, the fixture, `CHECK_CMD`, the parser, and the runner. |
-| **Noise** | The model is stochastic and two runs of the *same* task have differed by 16%. The baseline is run twice; nothing is ranked on a single run. |
+| **Noise** | Two runs of the *same code* have passed in 363 s and timed out at 1,801 s — a 5x spread on one task. Nothing here is ranked on one run, and nothing is ranked on two. |
 
 ## Isolation
 
@@ -39,11 +39,14 @@ python3 tests/diagnose_session.py 1     # turn a transcript into a hypothesis
 
 ## Statuses
 
-`baseline` · `keep` · `discard` · `crash` · `timeout` · `invalid` · `fail`
+`ok` · `fail` · `timeout` · `invalid` — these are what the evaluator emits.
 
-`invalid` means the measurement was not trustworthy — the model server died under the run, or the
-only server slot was occupied by an orphaned request from a killed trial. Those trials get fixed
-and re-run, never papered over.
+`fail` is a run that ended cleanly without passing the check. `timeout` is the 1,800 s wall clock
+ending a run that had not finished. `invalid` means the measurement was not trustworthy — the
+model server died under the run, or the only server slot was occupied by an orphaned request from
+a killed trial. Those get fixed and re-run, never papered over.
+
+Keep or discard is a human decision, recorded in the trial's `arm` string, not a status column.
 
 ## Two defects the setup itself had, found before any baseline was accepted
 
@@ -55,13 +58,14 @@ and re-run, never papered over.
    `Received second interrupt`. Fix: health asserted before and after; a dead server records
    `invalid` instead of a plausible-looking row.
 
-## What the baseline actually did
+## Results
 
 ```
 trial  arm                     wall_s  turns  check_fails  rewrites  prose_max  passed  status
 1      baseline (pre-advice)     1476     21            1         1       6070       0  timeout
 2      baseline (pre-advice)      363     10            1         1        989       1  ok
 3      parse advice              1256     22            3         1        223       1  ok
+4      baseline (post-advice)     681     12            1         1       1110       1  ok
 ```
 
 Trial 1 wrote the spec once (4,880 characters), the check failed, and it never changed a file
@@ -91,20 +95,31 @@ Evidence, from the transcripts rather than from the run times:
 The advice is verified against the real captured output in `tests/test_bonsai_pi.py`
 (`CheckParseAdvice`), including the case it must *not* fire on - an ordinary assertion failure.
 
-## What this run does not establish
+## What the four rows do and do not say
 
-**The run times cannot rank anything.** Trial 1 and trial 2 are the same code, and one timed out
-at 1,801 s while the other finished in 363 s. Trial 3 passed at 1,256 s - a slow pass, sitting
-inside that spread. Reporting "parse advice made it 15% faster" from these three rows would be
-inventing a number. The claim this loop supports is narrower and is the one above: the advice
-fires, the model stops investigating the toolchain, and a run that would have died recovers.
+Trial 3 and trial 4 are the **same code**. Shipping the advice in trial 3 made it part of the
+harness, so row 4 is not a control for row 3 - it is a second sample of it. The honest grouping
+is therefore two runs with the advice and two without:
 
-Row 3 also shows the cost of that recovery: three failed checks and 22 turns. The advice removes
-the *fatal* reading of a parse error, not the parse error.
+| | runs | passed | wall_s |
+|---|---|---|---|
+| without the advice | 2 | 1 | 1476, 363 |
+| with the advice | 2 | 2 | 1256, 681 |
+
+Two against two says nothing about the rate, and it would be dishonest to present it as though it
+did: the pass/total difference is 1/2 against 2/2, which is not a result. **The run times cannot
+rank anything either.** Trials 1 and 2 are identical code and one timed out at 1,801 s while the
+other finished in 363 s - a 5x spread on the same task with the same harness. Trial 3's 1,256 s
+sits inside that spread; so does trial 4's 681 s.
+
+The claim this loop supports is narrower, and is the one above it: the advice fires, the model
+stops investigating the toolchain, and a run that would have died recovers. Trial 3 cost three
+failed checks and 22 turns to do it - the advice removes the *fatal* reading of a parse error,
+not the parse error.
 
 ## Next, in order
 
-1. **Raise n before ranking.** Ten runs per arm, not one. Until then nothing here is a rate.
+1. **Raise n before ranking.** Ten runs per arm, not two. Until then nothing here is a rate.
 2. **Read nudge** (`BONSAI_NUDGE_AFTER=4`): 6 reader calls before the first write in every run so
    far, and the extension exists but has never been switched on.
 3. **`--reasoning 512`** against the 1024 default.
@@ -116,5 +131,6 @@ A fifth hypothesis was withdrawn. The first diagnostics reported the same bash c
 **fifteen times**, which motivated a repeat-breaking extension. The commands are 23 *distinct*
 calls that share a `cd <worktree> && ` prefix, and the metric keyed on a 60-character prefix. No
 true repeats exist in trial 1. The extension was reverted and the metric fixed.
+
 
 
