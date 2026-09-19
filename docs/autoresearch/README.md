@@ -148,8 +148,21 @@ dropping an arm once its prediction looks bad is how a loop starts fooling itsel
 2. **Tell the model what the check is, and that it runs by itself.** The launcher already knows
    `BONSAI_CHECK_COMMAND` and the hook already runs it after every write and edit, and the model
    is told neither. It spends 4 turns discovering the test setup, then runs vitest by hand 1-4
-   more times - twice over the whole directory, which is the 38% above. This is now the top
-   lever, by a wide margin, and it is one prompt line.
+   more times - twice over the whole directory. This is now the top lever, by a wide margin, and
+   it is one prompt line.
+
+   **Prediction, written before the trial.** Counting the turns that would not exist if the model
+   knew the check, and adding up the time those turns actually took:
+
+   | run | removable turns | seconds | share of wall time |
+   |---|---|---|---|
+   | trial 3 | 8 of 22 | 398 | 32% |
+   | trial 4 | 5 of 12 | 137 | 21% |
+   | trial 5 | 6 of 13 | 471 | 52% |
+
+   So 20-50% of `wall_s`, and the prediction is falsifiable: if the arm comes back inside the
+   baseline spread, the turns were not the cost and the change is not worth keeping.
+
 3. **Read nudge** (`BONSAI_NUDGE_AFTER=4`): queued, and cheap. 6-9 reader calls before the first
    write in every run, though the timing says those early turns cost only ~55 s together.
 4. **`--reasoning 512`**: queued, and expected flat on the arithmetic above. Worth running
