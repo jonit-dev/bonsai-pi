@@ -117,20 +117,44 @@ stops investigating the toolchain, and a run that would have died recovers. Tria
 failed checks and 22 turns to do it - the advice removes the *fatal* reading of a parse error,
 not the parse error.
 
+## Where the wall clock actually goes
+
+The transcript carries per-message timestamps and token counts, so the gap between one assistant
+message and the next can be decomposed. On trial 3, for turns where almost nothing was re-read:
+
+| input tokens | output tokens | gap | implied rate |
+|---|---|---|---|
+| 490 | 1,161 | 82 s | 14.2 t/s |
+| 17 | 1,553 | 108 s | 14.4 t/s |
+| 839 | 2,593 | 180 s | 14.4 t/s |
+| 555 | 1,658 | 107 s | 15.5 t/s |
+
+Output volume at ~15 t/s accounts for the gap **entirely**. There is no room left for thinking
+tokens, which is what `reasoning: 0` in every message's usage also says. The `--reasoning 512`
+arm was queued on the assumption that a 1,024-token budget was being spent; the arithmetic says it
+is not binding, so that arm is expected to come back flat.
+
+What does dominate is two turns in trial 3: 169 s and **305 s**, on inputs of 7,329 and 8,244
+tokens against outputs of only 169 and 275. That is prefill and tool time, not generation. Both
+follow the model running `npx vitest run packages/core/__tests__` - the whole directory, by hand -
+whose output floods the context. Together they are **474 s of the run's 1,259 s, 38%**.
+
+So the ordering below is not the order the arms were queued in. The queue stays as pre-registered:
+dropping an arm once its prediction looks bad is how a loop starts fooling itself.
+
 ## Next, in order
 
 1. **Raise n before ranking.** Ten runs per arm, not two. Until then nothing here is a rate.
-2. **Read nudge** (`BONSAI_NUDGE_AFTER=4`): 6 reader calls before the first write in every run so
-   far, and the extension exists but has never been switched on.
-3. **`--reasoning 512`** against the 1024 default. This is the likeliest lever on `wall_s`: at 22
-   turns and 1,256 s, trial 3 averaged ~57 s per turn, which matches a 1,024-token budget at the
-   ~15 t/s this card generates - the thinking is most of the wall clock, not the file.
-4. **Say what the check is, in the prompt.** Trials 3 and 4 each spent 2-3 turns discovering the
-   test setup - `ls vitest.config*`, `grep '"test"' package.json`, `find -name vitest.config*` -
-   and one went on to run a whole directory and investigate an unrelated failing spec. The
-   launcher already knows `BONSAI_CHECK_COMMAND`; the model is never told it, so it goes looking.
-   Not implemented: the batch below runs the current harness, and editing it mid-batch would
-   change the harness under the later trials in the same batch.
+2. **Tell the model what the check is, and that it runs by itself.** The launcher already knows
+   `BONSAI_CHECK_COMMAND` and the hook already runs it after every write and edit, and the model
+   is told neither. It spends 4 turns discovering the test setup, then runs vitest by hand 1-4
+   more times - twice over the whole directory, which is the 38% above. This is now the top
+   lever, by a wide margin, and it is one prompt line.
+3. **Read nudge** (`BONSAI_NUDGE_AFTER=4`): queued, and cheap. 6-9 reader calls before the first
+   write in every run, though the timing says those early turns cost only ~55 s together.
+4. **`--reasoning 512`**: queued, and expected flat on the arithmetic above. Worth running
+   precisely because it is expected to fail - a knob whose help text claims "512 measured faster"
+   should not stay in the launcher on the strength of that claim alone.
 5. **The output cap** keeps the head of the check output; vitest prints its summary before the
    failure detail. Measured at 3,126 characters against a 3,000 cap in trial 1, so it is live but
    not yet binding.
@@ -139,6 +163,7 @@ A fifth hypothesis was withdrawn. The first diagnostics reported the same bash c
 **fifteen times**, which motivated a repeat-breaking extension. The commands are 23 *distinct*
 calls that share a `cd <worktree> && ` prefix, and the metric keyed on a 60-character prefix. No
 true repeats exist in trial 1. The extension was reverted and the metric fixed.
+
 
 
 
