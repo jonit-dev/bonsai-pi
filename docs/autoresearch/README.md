@@ -79,6 +79,10 @@ trial  arm                     wall_s  turns  check_fails  rewrites  prose_max  
 6      read nudge 4              1636     17            2         2       2131        1       0  fail
 9      read nudge 4              1651     30            1         1       4981        0       0  timeout
 10     reasoning 512              370      6            1         1        406        0       1  ok
+11     baseline                  1202     17            1         1       1475        0       1  ok
+12     baseline + check-announced 712     14            3         1        264        0       1  ok
+13     baseline                  1143     16            2         1        368        0       1  ok
+14     baseline + check-announced 850     10            2         1       1837        0       1  ok
 ```
 
 Trials 3, 4 and 5 are the same code (the advice shipped during trial 3). Trials 1 and 2 are the
@@ -126,6 +130,25 @@ Trial 10 is fast because it generated **3.5x less**, not because each token came
 per-turn arithmetic that predicted this arm flat still holds, and the baseline's own fastest run
 was 363 s under the 1,024 default, so trial 10 sits inside the spread either way. One run against
 three cannot retire the knob; it can only decline to promote it.
+
+## The change that was absorbed
+
+Trials 11-14 are an interleaved A/B of one prompt line against its own control, run in the same
+batch, alternating, so drift cannot pass for an effect:
+
+| pair | control | arm | |
+|---|---|---|---|
+| 1 | 1202 s, 17 turns | **712 s, 14 turns** | 41% faster |
+| 2 | 1143 s, 16 turns | **850 s, 10 turns** | 26% faster |
+
+Median **1172 s -> 781 s, 33% faster**, both arms passing 2 of 2 and both pairs agreeing on the
+direction. The prediction written before the batch was 20-50%, and the mechanism is visible in the
+transcripts of the arm runs: **0 setup-reconnaissance turns and 0 hand-run checks**, against 2-4
+and 1-4 in every run before it. `BONSAI_ANNOUNCE_CHECK` is on by default as a result.
+
+Two runs per arm is still a small sample, and the honest reading is that this is the first
+direction this loop has established rather than a rate it has measured. It is also the only change
+here whose effect was predicted before it was run and then landed inside the prediction.
 
 ## What the read nudge did, and did not do
 
@@ -212,11 +235,8 @@ dropping an arm once its prediction looks bad is how a loop starts fooling itsel
    `tool_call` block cannot prevent that; only what the model reads before it generates can. The
    advice that says "do not rewrite the file, fix only what the error names" is attached at the
    *second* failure today, which is one failure too late to be read before the rewrite is written.
-3. **Tell the model what the check is, and that it runs by itself.** The launcher already knows
-   `BONSAI_CHECK_COMMAND` and the hook already runs it after every write and edit, and the model
-   is told neither. It spends 4 turns discovering the test setup, then runs vitest by hand 1-4
-   more times - twice over the whole directory. It is one prompt line, and the prediction below is
-   still the largest single number in this file.
+3. **Tell the model what the check is, and that it runs by itself.** DONE - absorbed in trials
+   11-14, median 1172 s to 781 s. Left here as the record of what it replaced.
 
    **Prediction, written before the trial.** Counting the turns that would not exist if the model
    knew the check, and adding up the time those turns actually took:
