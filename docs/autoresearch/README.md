@@ -19,9 +19,10 @@ a fixed task, one change at a time, with the numbers written down — not to fee
 
 ## Isolation
 
-Branch `autoresearch/harness-run1`. Nothing is pushed — the loop is local and the ledger is
-gitignored, so experiment commits stay code-only. The worktree under test is
-`threenative-engine/.worktrees/bonsai-e2e`; the main checkout is never touched.
+The loop ran on branch `autoresearch/harness-run1`, fast-forwarded into `main` and pushed once the
+gains were settled. The ledger and logs stay gitignored so commits are code-only; the numbers that
+matter are in this file. The worktree under test is `threenative-engine/.worktrees/bonsai-e2e`; the
+main checkout is never touched.
 
 ## Running a trial
 
@@ -130,6 +131,37 @@ Trial 10 is fast because it generated **3.5x less**, not because each token came
 per-turn arithmetic that predicted this arm flat still holds, and the baseline's own fastest run
 was 363 s under the 1,024 default, so trial 10 sits inside the spread either way. One run against
 three cannot retire the knob; it can only decline to promote it.
+
+## The change that was discarded
+
+Trials 15-18 were the same interleaved design for advising on the *first* failed check rather than
+the second.
+
+| | runs | wall_s |
+|---|---|---|
+| control (ladder unchanged) | 3 | 290, 712, 850 |
+| arm (advise on first failure) | 1 | 1214 |
+
+The arm is slower than all three controls on one sample, and `blocked` was 0 on both sides - the
+rewrite guard did not fire in any of these runs, so the mechanism the advice targets was not the
+binding one. The advice fired (once, in the transcript) and did not help, so it was reverted rather
+than left in every failure result unmeasured. Trial 17 was killed when the loop was stopped and,
+like trial 8, left no row.
+
+Trial 6's 7,152-character rewrite is still a real defect and the reasoning behind the change still
+holds. That is not a reason to keep code the measurement did not support.
+
+## Totals
+
+18 trials over roughly four hours of wall clock: 16 rows recorded, one trial lost to a server that
+would not start, one killed by hand. One change absorbed - a 33% median improvement, predicted
+before it was run. One change discarded. Two arms measured and not promoted (read nudge, reasoning
+512). One bad metric found and fixed, one fatal failure mode found and fixed, three setup defects
+found and fixed.
+
+The floor this loop ran into is variance: identical code spans 290 s to 1,801 s on this task. Four
+runs per arm is enough to see a 33% effect twice and not enough to see a small one once. Any future
+session should raise n before it tries to rank anything finer than that.
 
 ## The change that was absorbed
 
