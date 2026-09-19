@@ -342,7 +342,7 @@ def node_with_type_stripping():
 NODE = node_with_type_stripping()
 
 
-def check_advice_for(failure_text):
+def check_advice_for(failure_text, env_extra=None):
     """Run the real check-after-edit extension and return what it appends to the tool result."""
     tmp = Path(tempfile.mkdtemp(prefix="bonsai-parse-"))
     (tmp / "check-out.txt").write_text(failure_text)
@@ -350,6 +350,8 @@ def check_advice_for(failure_text):
     env = dict(os.environ)
     # `exit 1` is what makes the hook take the failure branch; the text is the check's output.
     env["BONSAI_CHECK_COMMAND"] = f"cat {tmp / 'check-out.txt'}; exit 1"
+    if env_extra:
+        env.update(env_extra)
     proc = subprocess.run(
         [NODE, str(tmp / "driver.mts")], capture_output=True, text=True, env=env, timeout=120, cwd=REPO
     )
@@ -390,6 +392,22 @@ class CheckParseAdvice(unittest.TestCase):
         advice = check_advice_for(" FAIL  some.spec.ts\nAssertionError: expected 1 to be 2\n")
         self.assertNotIn("does not parse", advice)
         self.assertIn("the check FAILS", advice)
+
+    def test_the_first_failure_says_do_not_rewrite(self):
+        # The first failure is where the model decides to rewrite the file. Trial 6 answered it
+        # with a 7,152-character rewrite, which is ~120 s of generation the guard cannot prevent,
+        # because the arguments exist before `tool_call` runs.
+        advice = check_advice_for(" FAIL  some.spec.ts\nAssertionError: expected 1 to be 2\n")
+        self.assertIn("do not write the whole file again", advice)
+
+    def test_the_first_failure_advice_has_a_control(self):
+        # BONSAI_ADVISE_ON_FIRST_FAILURE=0 is the ladder every trial up to 14 ran: silent until
+        # the second failure. Without this the A/B has no control.
+        advice = check_advice_for(
+            " FAIL  some.spec.ts\nAssertionError: expected 1 to be 2\n",
+            env_extra={"BONSAI_ADVISE_ON_FIRST_FAILURE": "0"},
+        )
+        self.assertNotIn("do not write the whole file again", advice)
 
 
 if __name__ == "__main__":
