@@ -61,12 +61,17 @@ Keep or discard is a human decision, recorded in the trial's `arm` string, not a
 ## Results
 
 ```
-trial  arm                     wall_s  turns  check_fails  rewrites  prose_max  passed  status
-1      baseline (pre-advice)     1476     21            1         1       6070       0  timeout
-2      baseline (pre-advice)      363     10            1         1        989       1  ok
-3      parse advice              1256     22            3         1        223       1  ok
-4      baseline (post-advice)     681     12            1         1       1110       1  ok
+trial  arm                     wall_s  turns  check_fails  rewrites  prose_max  blocked  passed  status
+1      baseline (pre-advice)     1476     21            1         1       6070        0       0  timeout
+2      baseline (pre-advice)      363     10            1         1        989        0       1  ok
+3      parse advice              1256     22            3         1        223        0       1  ok
+4      baseline (post-advice)     681     12            1         1       1110        0       1  ok
+5      baseline (post-advice)    1495     14            3         1        392        0       0  timeout
+6      read nudge 4              1636     17            2         2       2131        1       0  fail
 ```
+
+Trials 3, 4 and 5 are the same code (the advice shipped during trial 3). Trials 1 and 2 are the
+code as it was before that.
 
 Trial 1 wrote the spec once (4,880 characters), the check failed, and it never changed a file
 again. The check's answer was `Error: Transform failed with 1 error: [PARSE_ERROR] Unterminated
@@ -95,7 +100,28 @@ Evidence, from the transcripts rather than from the run times:
 The advice is verified against the real captured output in `tests/test_bonsai_pi.py`
 (`CheckParseAdvice`), including the case it must *not* fire on - an ordinary assertion failure.
 
-## What the four rows do and do not say
+## What the read nudge did, and did not do
+
+`BONSAI_NUDGE_AFTER=4` fired as designed - two nudges by turn 4 - and the early turns shrank:
+
+| | trials 3-5 (nudge off) | trial 6 (nudge on) |
+|---|---|---|
+| reads before the first write | 8, 8, 9 | **6** |
+| setup reconnaissance turns | 4, 4, 2 | **2** |
+| checks run by hand | 4, 1, 0 | **0** |
+
+Then it failed the check anyway, in 17 turns and 1,636 s, for reasons the nudge does not touch:
+
+- **two whole-file writes**, 8,697 characters and then 7,152 - the second one refused, and the only
+  `blocked=1` in the ledger so far. The model's instinct after a bad check is still to write the
+  file again.
+- **its own spec file read back 7 times.**
+- a 2,131-character prose dump at the end.
+
+Output volume at ~15 t/s is the wall clock, and 8,697 + 7,152 characters is about 265 s of
+generation on its own. So the nudge fixes the cheap end of the problem - the early reads cost
+~55 s together - and leaves the expensive end alone.
+
 
 Trial 3 and trial 4 are the **same code**. Shipping the advice in trial 3 made it part of the
 harness, so row 4 is not a control for row 3 - it is a second sample of it. The honest grouping
