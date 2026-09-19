@@ -57,9 +57,6 @@ export default function checkAfterEdit(pi: ExtensionAPI): void {
 	}
 
 	const stopAt = Number(process.env.BONSAI_CHECK_MAX_FAILURES ?? 5);
-	// The control for this advice is the ladder without it: BONSAI_ADVISE_ON_FIRST_FAILURE=0,
-	// which is exactly what every trial up to 14 ran.
-	const adviseOnFirst = process.env.BONSAI_ADVISE_ON_FIRST_FAILURE !== "0";
 
 	// Consecutive failures of the same check, reset by a passing run. This is the whole point:
 	// without it the blast radius is unbounded - measured, the model rewrote the same file twice
@@ -119,13 +116,6 @@ export default function checkAfterEdit(pi: ExtensionAPI): void {
 				`and nothing else.]`;
 		} else if (failures >= 2) {
 			advice = `\n\n[second failure. Do not rewrite the file - fix only what the error names.]`;
-		} else if (adviseOnFirst) {
-			// The first failure is where the model decides to rewrite the whole file, and this is
-			// the one turn where saying nothing was measured to cost the most. Trial 6 wrote 8,697
-			// characters, failed, and answered with a 7,152-character rewrite of the same file: at
-			// ~15 t/s that is ~120 s of generation spent before the rewrite guard could refuse it,
-			// because a `tool_call` block cannot un-generate the arguments it is handed.
-			advice = `\n\n[the check failed. Fix only the lines the error names, with edit - do not write the whole file again.]`;
 		}
 
 		return {

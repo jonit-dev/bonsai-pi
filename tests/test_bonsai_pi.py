@@ -393,22 +393,6 @@ class CheckParseAdvice(unittest.TestCase):
         self.assertNotIn("does not parse", advice)
         self.assertIn("the check FAILS", advice)
 
-    def test_the_first_failure_says_do_not_rewrite(self):
-        # The first failure is where the model decides to rewrite the file. Trial 6 answered it
-        # with a 7,152-character rewrite, which is ~120 s of generation the guard cannot prevent,
-        # because the arguments exist before `tool_call` runs.
-        advice = check_advice_for(" FAIL  some.spec.ts\nAssertionError: expected 1 to be 2\n")
-        self.assertIn("do not write the whole file again", advice)
-
-    def test_the_first_failure_advice_has_a_control(self):
-        # BONSAI_ADVISE_ON_FIRST_FAILURE=0 is the ladder every trial up to 14 ran: silent until
-        # the second failure. Without this the A/B has no control.
-        advice = check_advice_for(
-            " FAIL  some.spec.ts\nAssertionError: expected 1 to be 2\n",
-            env_extra={"BONSAI_ADVISE_ON_FIRST_FAILURE": "0"},
-        )
-        self.assertNotIn("do not write the whole file again", advice)
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
