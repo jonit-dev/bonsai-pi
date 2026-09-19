@@ -57,11 +57,14 @@ Keep or discard is a human decision, recorded in the trial's `arm` string, not a
 2. **A trial with no server is not a measurement.** One trial died at 13,542 tokens with
    `Received second interrupt`. Fix: health asserted before and after; a dead server records
    `invalid` instead of a plausible-looking row.
-3. **A killed trial silently skips the next one.** Trial 7 was killed mid-run to stop a batch; it
-   had already written the spec file, so the worktree was dirty. Trial 8's evaluator died in
-   `reset_worktree()` before it opened its log - there is no `trial-8.log` at all - and the ledger
-   simply has no row for it. Nothing surfaced this: the batch moved on to trial 9. Either clean the
-   worktree between trials in the driver, or do not kill a trial that is mid-flight.
+3. **A trial whose server will not start vanishes silently.** Trial 8 produced no row and no log;
+   the batch output says only `llama-server did not come up within 5 minutes`. It ran immediately
+   after the previous server was killed by hand, on an 8 GB card where the dying server may not
+   have released its VRAM yet. `start_server()` raises `SystemExit` *before* the evaluator opens
+   its log, so there is no `trial-8.log` and nothing on stdout to say a trial went missing - the
+   batch simply moved on to trial 9. (My first write-up blamed a dirty worktree. That was wrong:
+   `reset_worktree()` runs first and would have raised its own message, which is not what
+   happened.) Do not kill a server and start a trial in the same breath.
 
 
 ## Results
@@ -75,6 +78,7 @@ trial  arm                     wall_s  turns  check_fails  rewrites  prose_max  
 5      baseline (post-advice)    1495     14            3         1        392        0       0  timeout
 6      read nudge 4              1636     17            2         2       2131        1       0  fail
 9      read nudge 4              1651     30            1         1       4981        0       0  timeout
+10     reasoning 512              370      6            1         1        406        0       1  ok
 ```
 
 Trials 3, 4 and 5 are the same code (the advice shipped during trial 3). Trials 1 and 2 are the
@@ -107,6 +111,22 @@ Evidence, from the transcripts rather than from the run times:
 The advice is verified against the real captured output in `tests/test_bonsai_pi.py`
 (`CheckParseAdvice`), including the case it must *not* fire on - an ordinary assertion failure.
 
+## What `--reasoning 512` did
+
+It returned the fastest run in the ledger - 370 s, 6 turns, passed - and that is still not
+evidence the budget is doing anything:
+
+| run | turns | output tokens | effective tok/s |
+|---|---|---|---|
+| trial 10 (reasoning 512) | 5 | 4,625 | 13.2 |
+| trial 4 (baseline, fast) | 11 | 6,513 | 9.8 |
+| trial 6 (nudge, fail) | 16 | 16,035 | 9.9 |
+
+Trial 10 is fast because it generated **3.5x less**, not because each token came cheaper. The
+per-turn arithmetic that predicted this arm flat still holds, and the baseline's own fastest run
+was 363 s under the 1,024 default, so trial 10 sits inside the spread either way. One run against
+three cannot retire the knob; it can only decline to promote it.
+
 ## What the read nudge did, and did not do
 
 `BONSAI_NUDGE_AFTER=4` fired as designed - two nudges by turn 4 - and the early turns shrank:
@@ -136,25 +156,26 @@ tokens, ~83 s. The nudge fixes the cheap end - the early reads cost ~55 s togeth
 expensive end where it was.
 
 
-Trial 3 and trial 4 are the **same code**. Shipping the advice in trial 3 made it part of the
-harness, so row 4 is not a control for row 3 - it is a second sample of it. The honest grouping
-is therefore two runs with the advice and two without:
+The rows are not eight arms. Trials 3, 4 and 5 are the **same code** - shipping the advice during
+trial 3 made it part of the harness - so pooling them is the only honest reading:
 
-| | runs | passed | wall_s |
-|---|---|---|---|
-| without the advice | 2 | 1 | 1476, 363 |
-| with the advice | 2 | 2 | 1256, 681 |
+| harness | rows | passed | wall_s | charged median |
+|---|---|---|---|---|
+| before the advice | 1, 2 | 1 of 2 | 1476, 363 | 1082 |
+| + parse advice | 3, 4, 5 | 2 of 3 | 1256, 681, 1495 | 1256 |
+| + parse advice, + read nudge | 6, 9 | **0 of 2** | 1636, 1651 | 1800 |
+| + parse advice, + reasoning 512 | 10 | 1 of 1 | 370 | 370 |
 
-Two against two says nothing about the rate, and it would be dishonest to present it as though it
-did: the pass/total difference is 1/2 against 2/2, which is not a result. **The run times cannot
-rank anything either.** Trials 1 and 2 are identical code and one timed out at 1,801 s while the
-other finished in 363 s - a 5x spread on the same task with the same harness. Trial 3's 1,256 s
-sits inside that spread; so does trial 4's 681 s.
+None of those differences is a result. **The run times cannot rank anything:** rows 1 and 2 are
+identical code, and one timed out at 1,801 s while the other finished in 363 s - a 5x spread on
+one task with one harness. Row 10's 370 s sits inside that spread, and so does row 4's 681 s. The
+read nudge's 0 of 2 is worth watching and is not yet a finding; two runs against three is not a
+comparison, and both its runs were the slowest arms either way.
 
-The claim this loop supports is narrower, and is the one above it: the advice fires, the model
-stops investigating the toolchain, and a run that would have died recovers. Trial 3 cost three
-failed checks and 22 turns to do it - the advice removes the *fatal* reading of a parse error,
-not the parse error.
+The claim this loop does support is narrower, and is the one above: the parse advice fires, the
+model stops investigating the toolchain, and a run that would have died recovers. Trial 3 cost
+three failed checks and 22 turns to do it - the advice removes the *fatal* reading of a parse
+error, not the parse error.
 
 ## Where the wall clock actually goes
 
