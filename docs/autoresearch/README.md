@@ -48,7 +48,7 @@ a killed trial. Those get fixed and re-run, never papered over.
 
 Keep or discard is a human decision, recorded in the trial's `arm` string, not a status column.
 
-## Two defects the setup itself had, found before any baseline was accepted
+## Three defects the setup itself had, found before any baseline was accepted
 
 1. **A killed trial wedges the next one.** llama-server runs `-np 1`; a killed client left its
    request generating into a dead socket, holding the only slot. The next trial's request queued
@@ -57,6 +57,12 @@ Keep or discard is a human decision, recorded in the trial's `arm` string, not a
 2. **A trial with no server is not a measurement.** One trial died at 13,542 tokens with
    `Received second interrupt`. Fix: health asserted before and after; a dead server records
    `invalid` instead of a plausible-looking row.
+3. **A killed trial silently skips the next one.** Trial 7 was killed mid-run to stop a batch; it
+   had already written the spec file, so the worktree was dirty. Trial 8's evaluator died in
+   `reset_worktree()` before it opened its log - there is no `trial-8.log` at all - and the ledger
+   simply has no row for it. Nothing surfaced this: the batch moved on to trial 9. Either clean the
+   worktree between trials in the driver, or do not kill a trial that is mid-flight.
+
 
 ## Results
 
