@@ -58,36 +58,63 @@ and re-run, never papered over.
 ## What the baseline actually did
 
 ```
-trial  arm       wall_s  turns  check_fails  rewrites  prose_max  blocked  passed  status
-1      baseline    1476     21            1         1       6070        0       0  timeout
+trial  arm                     wall_s  turns  check_fails  rewrites  prose_max  passed  status
+1      baseline (pre-advice)     1476     21            1         1       6070       0  timeout
+2      baseline (pre-advice)      363     10            1         1        989       1  ok
+3      parse advice              1256     22            3         1        223       1  ok
 ```
 
-It wrote the spec once (4,880 characters), the check failed, and it never changed a file again.
-The check's answer was `Error: Transform failed with 1 error: [PARSE_ERROR] Unterminated string`
-at `entity-snapshot.spec.ts:86:68` - a syntax error in the file it had just written. It read that
-as a broken environment instead, and spent the rest of the run in `node_modules` looking for
-`oxc`. The 1,800 s wall clock ended it.
+Trial 1 wrote the spec once (4,880 characters), the check failed, and it never changed a file
+again. The check's answer was `Error: Transform failed with 1 error: [PARSE_ERROR] Unterminated
+string` at `entity-snapshot.spec.ts:86:68` - a syntax error in the file it had just written. It
+read that as a broken environment instead, and spent the rest of the run in `node_modules`
+looking for `oxc`. The 1,800 s wall clock ended it.
 
 The failure is not that the model is slow. It is that the check result, which already names the
 file and the exact position, does not say whose file it is.
 
-## Hypotheses queued
+## The one change that was kept
 
-In the order the evidence supports them:
+`parseError()` in `check-after-edit.ts`. When the check output contains a parse error, the advice
+that already exists on failure is replaced with the file, line and column, and the sentence that
+the model was missing: this is a syntax error in the file you just wrote, not a problem with
+vitest, oxc, node_modules or the config.
 
-1. **Parse errors are reported as the model's own syntax error** (implemented: `parseError()` in
-   `check-after-edit.ts`). The message already had file, line and column; the change says it is a
-   syntax error in the file just written and that vitest, oxc and the config are not the problem.
-   Trial 2.
-2. **The output cap can hide the error.** `MAX_OUTPUT_CHARS` keeps the head of the check output,
-   and vitest prints its summary before the failure detail. Not the binding constraint here (the
-   parse error survived at ~700 characters) but it will be on a noisier suite.
-3. **Reconnaissance**: 6 reader calls before the first write, every run. The read nudge exists and
-   had never been switched on.
-4. **`--reasoning N`**: 512 against the 1024 default.
+Evidence, from the transcripts rather than from the run times:
 
-A fifth hypothesis was withdrawn: the first diagnostics reported the same bash command repeated
+| | trial 1 (no advice) | trial 3 (advice) |
+|---|---|---|
+| parse errors hit | 1 | 1 (a different message: `Expected a semicolon...`, line 127) |
+| calls spent in the toolchain | **7 of 23** | **2 of 22** |
+| what happened next | no further file change, timeout at 1801 s | fixed, check passing by turn 41 |
+
+The advice is verified against the real captured output in `tests/test_bonsai_pi.py`
+(`CheckParseAdvice`), including the case it must *not* fire on - an ordinary assertion failure.
+
+## What this run does not establish
+
+**The run times cannot rank anything.** Trial 1 and trial 2 are the same code, and one timed out
+at 1,801 s while the other finished in 363 s. Trial 3 passed at 1,256 s - a slow pass, sitting
+inside that spread. Reporting "parse advice made it 15% faster" from these three rows would be
+inventing a number. The claim this loop supports is narrower and is the one above: the advice
+fires, the model stops investigating the toolchain, and a run that would have died recovers.
+
+Row 3 also shows the cost of that recovery: three failed checks and 22 turns. The advice removes
+the *fatal* reading of a parse error, not the parse error.
+
+## Next, in order
+
+1. **Raise n before ranking.** Ten runs per arm, not one. Until then nothing here is a rate.
+2. **Read nudge** (`BONSAI_NUDGE_AFTER=4`): 6 reader calls before the first write in every run so
+   far, and the extension exists but has never been switched on.
+3. **`--reasoning 512`** against the 1024 default.
+4. **The output cap** keeps the head of the check output; vitest prints its summary before the
+   failure detail. Measured at 3,126 characters against a 3,000 cap in trial 1, so it is live but
+   not yet binding.
+
+A fifth hypothesis was withdrawn. The first diagnostics reported the same bash command repeated
 **fifteen times**, which motivated a repeat-breaking extension. The commands are 23 *distinct*
 calls that share a `cd <worktree> && ` prefix, and the metric keyed on a 60-character prefix. No
-true repeats exist in the baseline. The extension was reverted and the metric fixed.
+true repeats exist in trial 1. The extension was reverted and the metric fixed.
+
 
