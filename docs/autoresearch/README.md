@@ -74,10 +74,11 @@ trial  arm                     wall_s  turns  check_fails  rewrites  prose_max  
 4      baseline (post-advice)     681     12            1         1       1110        0       1  ok
 5      baseline (post-advice)    1495     14            3         1        392        0       0  timeout
 6      read nudge 4              1636     17            2         2       2131        1       0  fail
+9      read nudge 4              1651     30            1         1       4981        0       0  timeout
 ```
 
 Trials 3, 4 and 5 are the same code (the advice shipped during trial 3). Trials 1 and 2 are the
-code as it was before that.
+code as it was before that. Trial 8 has no row at all - see defect 3 above.
 
 Trial 1 wrote the spec once (4,880 characters), the check failed, and it never changed a file
 again. The check's answer was `Error: Transform failed with 1 error: [PARSE_ERROR] Unterminated
@@ -110,23 +111,29 @@ The advice is verified against the real captured output in `tests/test_bonsai_pi
 
 `BONSAI_NUDGE_AFTER=4` fired as designed - two nudges by turn 4 - and the early turns shrank:
 
-| | trials 3-5 (nudge off) | trial 6 (nudge on) |
+| | trials 3-5 (nudge off) | trials 6 and 9 (nudge on) |
 |---|---|---|
-| reads before the first write | 8, 8, 9 | **6** |
-| setup reconnaissance turns | 4, 4, 2 | **2** |
-| checks run by hand | 4, 1, 0 | **0** |
+| reads before the first write | 8, 8, 9 | **6, 6** |
+| setup reconnaissance turns | 4, 4, 2 | **2, 1** |
+| checks run by hand | 4, 1, 0 | **0, 0** |
+| turns | 22, 12, 14 | 17, **30** |
+| passed | 2 of 3 | **0 of 2** |
 
-Then it failed the check anyway, in 17 turns and 1,636 s, for reasons the nudge does not touch:
+Every mechanism it targets improved and both runs still failed. That is not evidence the nudge is
+harmful - two runs against three decides nothing, and these are the two slowest arms either way -
+but it is evidence the nudge is not the lever, and it should not be described as a win.
 
-- **two whole-file writes**, 8,697 characters and then 7,152 - the second one refused, and the only
-  `blocked=1` in the ledger so far. The model's instinct after a bad check is still to write the
-  file again.
-- **its own spec file read back 7 times.**
-- a 2,131-character prose dump at the end.
+What both runs died of is output volume, which the nudge does not touch:
 
-Output volume at ~15 t/s is the wall clock, and 8,697 + 7,152 characters is about 265 s of
-generation on its own. So the nudge fixes the cheap end of the problem - the early reads cost
-~55 s together - and leaves the expensive end alone.
+- **trial 6 wrote the file twice**, 8,697 characters and then 7,152 - the second refused, and the
+  only `blocked=1` in the ledger so far. The instinct after a bad check is still to write the file
+  again.
+- **trial 6 read its own spec back 7 times.**
+- **trial 9 closed with a 4,981-character prose dump**, the largest in the ledger.
+
+8,697 + 7,152 characters is about 265 s of generation on its own, and 4,981 characters is ~1,245
+tokens, ~83 s. The nudge fixes the cheap end - the early reads cost ~55 s together - and leaves the
+expensive end where it was.
 
 
 Trial 3 and trial 4 are the **same code**. Shipping the advice in trial 3 made it part of the
